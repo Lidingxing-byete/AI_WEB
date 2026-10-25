@@ -94,12 +94,14 @@ export function LeftPanel() {
           <input
             className="w-full rounded border border-ink-200 px-2 py-1.5 text-[13px] outline-none focus:border-ink-400"
             value={title}
+            maxLength={200}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="任务标题"
           />
           <textarea
             className="h-20 w-full resize-none rounded border border-ink-200 px-2 py-1.5 text-[13px] outline-none focus:border-ink-400"
             value={symptom}
+            maxLength={2000}
             onChange={(e) => setSymptom(e.target.value)}
             placeholder="现象描述（例如：串口完全没有输出，但板载LED还在闪烁）"
           />

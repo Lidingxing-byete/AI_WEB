@@ -261,6 +261,9 @@ def connect() -> sqlite3.Connection:
         _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        # 并发写等待上限：WAL 模式下多个诊断 worker 同时持久化时，
+        # 让请求侧等待而非立刻抛 "database is locked"。
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.executescript(SCHEMA)
         _ensure_columns(conn)      # 旧库补列，新库无操作
         conn.commit()

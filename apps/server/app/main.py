@@ -51,26 +51,26 @@ _engine = DiagnosticEngine()
 # Schemas
 # ======================================================================
 class TaskCreate(BaseModel):
-    title: str = "未命名诊断任务"
+    title: str = Field("未命名诊断任务", max_length=200)
     chip: str = CHIP_F103C8T6["name"]
-    symptom_text: str = ""
+    symptom_text: str = Field("", max_length=2000)
     pclk2_hz: int | None = None
     pclk1_hz: int | None = None
     actual_hse_hz: int | None = None
     # Phase 4：用户实测波特率（反向比对用）。提交即视为用户提供的实测观测。
     observed_baud: float | None = None
-    observed_baud_source: str = ""
+    observed_baud_source: str = Field("", max_length=200)
 
 
 class TaskPatch(BaseModel):
-    title: str | None = None
-    symptom_text: str | None = None
+    title: str | None = Field(None, max_length=200)
+    symptom_text: str | None = Field(None, max_length=2000)
     status: str | None = None
     pclk2_hz: int | None = None
     pclk1_hz: int | None = None
     actual_hse_hz: int | None = None
     observed_baud: float | None = None
-    observed_baud_source: str | None = None
+    observed_baud_source: str | None = Field(None, max_length=200)
 
 
 class HardwareTestIn(BaseModel):
@@ -97,9 +97,11 @@ class HardwareTestIn(BaseModel):
 
 
 class ArtifactIn(BaseModel):
-    kind: str = "source_code"      # source_code / build_log / serial_capture
-    name: str = "main.c"
-    content: str = ""
+    # 枚举白名单：source_code 为当前唯一写入值；source 为历史别名
+    # （旧版本产生，库里已有存量，读不受影响），保留以兼容既有调用。
+    kind: str = Field("source_code", pattern="^(source_code|source|build_log|serial_capture)$")
+    name: str = Field("main.c", max_length=120)
+    content: str = Field("", max_length=2_000_000)
 
 
 class TestResultIn(BaseModel):
