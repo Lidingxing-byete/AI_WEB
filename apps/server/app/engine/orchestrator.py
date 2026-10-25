@@ -544,7 +544,15 @@ class DiagnosticEngine:
                                     query[:60], query=query, top_k=5)
             if run_r.ok() and hits_bm25:
                 report.references = [h.to_dict() for h in hits_bm25]
-                emit("retrieval_done", {"hits": report.references})
+                # SSE 推流与 DB/GET 契约一致：matched_terms 统一为逗号分隔字符串，
+                # 避免前端拿到数组时调用 .split 崩溃（白屏）。
+                # report.references 保持列表原样，入库 join 逻辑不受影响。
+                emit("retrieval_done", {"hits": [
+                    {**d, "matched_terms": ",".join(d["matched_terms"])
+                     if isinstance(d.get("matched_terms"), (list, tuple))
+                     else d.get("matched_terms")}
+                    for d in report.references
+                ]})
         else:
             skip("search_reference", "无有效查询串")
 

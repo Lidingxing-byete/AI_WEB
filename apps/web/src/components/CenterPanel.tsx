@@ -186,8 +186,10 @@ export function CenterPanel() {
                 </div>
                 {r.matched_terms && (
                   <div className="mt-1 flex flex-wrap gap-1">
-                    {r.matched_terms
-                      .split(',')
+                    {(Array.isArray(r.matched_terms)
+                      ? r.matched_terms
+                      : (r.matched_terms ?? '').split(',')
+                    )
                       .filter(Boolean)
                       .slice(0, 8)
                       .map((t) => (
