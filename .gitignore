@@ -54,3 +54,6 @@ deliverables/技术文档.html
 
 # 评测运行产物（不入库）
 /apps/server/eval/results/
+
+# 内部工作文档（不入公开仓库）
+/deliverables/提交前终检清单.md
