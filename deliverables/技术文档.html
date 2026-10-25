@@ -3,6 +3,13 @@
 * { box-sizing: border-box; }
 body { font-family: "Microsoft YaHei", "PingFang SC", "SimSun", sans-serif;
        font-size: 10.5pt; line-height: 1.65; color: #1f2937; margin: 0; }
+.cover { text-align: center; page-break-after: always; padding-top: 130pt; }
+.cover .kicker { font-size: 10pt; color: #2563eb; letter-spacing: 4px; margin-bottom: 26pt; }
+.cover h1 { font-size: 30pt; margin: 0 0 10pt; color: #0f172a; }
+.cover .sub { font-size: 14pt; color: #334155; margin-bottom: 60pt; }
+.cover .meta { font-size: 10.5pt; color: #6b7280; line-height: 2; }
+.cover .tag { display: inline-block; border: 1px solid #cbd5e1; border-radius: 20px;
+              padding: 4pt 14pt; margin-top: 30pt; color: #475569; font-size: 9.5pt; }
 h1 { font-size: 21pt; text-align: center; margin: 0 0 4pt; color: #111827; }
 h1 + p { text-align: center; color: #6b7280; font-size: 9.5pt; }
 h2 { font-size: 15pt; color: #0f172a; border-left: 4px solid #2563eb;
@@ -29,7 +36,19 @@ hr { border: none; border-top: 1px solid #e2e8f0; margin: 12pt 0; }
 a { color: #2563eb; text-decoration: none; }
 strong { font-weight: 700; }
 em { font-style: italic; }
-</style></head><body><h1>芯诊 AI · 技术文档</h1>
+</style></head><body>
+<div class="cover">
+  <div class="kicker">全国高校 AI Web 开发挑战赛 · B 组 · 省赛作品</div>
+  <h1>芯诊 AI</h1>
+  <div class="sub">证据驱动的 STM32 USART 故障诊断工作台</div>
+  <div class="meta">
+    技术文档（省赛提交材料）<br>
+    版本：2026-10-25<br>
+    形态：Web 应用 · 规则层 + 确定性工具 + RAG + 本地大模型解释
+  </div>
+  <div class="tag">可追溯 · 不硬猜 · 可重复 · 证据纪律</div>
+</div>
+<h1>芯诊 AI · 技术文档</h1>
 <blockquote>版本：2026-10-25（Phase 0–7 全部软件侧交付后整理）<br>适用读者：评委、开发者、使用者<br>本文档所有结论遵守项目证据纪律：系统内无任何 <code>[实测-硬件]</code> 结论（硬件实测 0/6，待用户上板回填）。<br>固定评测集仅 9 用例，所有评测数字均为<strong>趋势口径</strong>，不宣称任何准确率。</blockquote>
 <p>---</p>
 <h2>1. 产品概述</h2>
