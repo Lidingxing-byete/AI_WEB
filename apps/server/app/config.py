@@ -86,9 +86,10 @@ CLOUD_BASE_URL = os.getenv("XZ_CLOUD_BASE_URL", "")
 # 密钥只从环境变量读，绝不入库、绝不写进代码与文档
 CLOUD_API_KEY = os.getenv("XZ_CLOUD_API_KEY", "")
 
-# 本地模型（Ollama）：仅本机 127.0.0.1，不下模型、不改 Ollama 配置
+# 本地模型（Ollama）：仅本机 127.0.0.1，不下模型、不改 Ollama 配置。
+# 默认 qwen2.5-coder:7b —— 2026-10-25 三模型基线横向对比后选定（docs/Phase6_模型选型对比.md）
 OLLAMA_HOST = os.getenv("XZ_OLLAMA_HOST", "http://127.0.0.1:11434")
-LLM_MODEL = os.getenv("XZ_LLM_MODEL", "qwen2.5:7b")
+LLM_MODEL = os.getenv("XZ_LLM_MODEL", "qwen2.5-coder:7b")
 # 冷启动需把 4.7GB 权重载入显存，因此超时不能设太短
 LLM_TIMEOUT_S = float(os.getenv("XZ_LLM_TIMEOUT_S", "120"))
 LLM_TEMPERATURE = float(os.getenv("XZ_LLM_TEMPERATURE", "0.2"))
