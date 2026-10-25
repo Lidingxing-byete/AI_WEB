@@ -78,13 +78,18 @@ MAX_SOURCE_BYTES = 512 * 1024
 
 # ---------------------------------------------------------------- 模型层
 
-# 三级降级链（Phase 1 ADR）：云端可配置 provider → 本地 Ollama → 规则层兜底。
-# 云端留配置位但**默认不启用**（空字符串即跳过），保证 clone 即跑不依赖密钥。
-CLOUD_PROVIDER = os.getenv("XZ_CLOUD_PROVIDER", "")
-CLOUD_MODEL = os.getenv("XZ_CLOUD_MODEL", "")
-CLOUD_BASE_URL = os.getenv("XZ_CLOUD_BASE_URL", "")
+# 三级降级链（Phase 1 ADR）：云端（DeepSeek，可配置）→ 本地 Ollama → 规则层兜底。
+# 默认指向 DeepSeek（OpenAI 兼容接口）：填入 XZ_CLOUD_API_KEY 即启用云端；
+# 密钥留空则云端自动跳过（clone 即跑不依赖密钥）。
+CLOUD_PROVIDER = os.getenv("XZ_CLOUD_PROVIDER", "deepseek")
+CLOUD_MODEL = os.getenv("XZ_CLOUD_MODEL", "deepseek-chat")   # 备选 deepseek-reasoner
+CLOUD_BASE_URL = os.getenv("XZ_CLOUD_BASE_URL", "https://api.deepseek.com")
 # 密钥只从环境变量读，绝不入库、绝不写进代码与文档
 CLOUD_API_KEY = os.getenv("XZ_CLOUD_API_KEY", "")
+# 模型来源偏好：auto=云端就绪优先否则本地；local=固定本地；cloud=固定云端（失败自动降级本地）
+LLM_PREFERRED = os.getenv("XZ_LLM_PREFERRED", "auto").strip().lower()
+# 云端请求超时（云端无冷启动，60s 足够；仅当上下文极大时可放宽）
+CLOUD_TIMEOUT_S = float(os.getenv("XZ_CLOUD_TIMEOUT_S", "60"))
 
 # 本地模型（Ollama）：仅本机 127.0.0.1，不下模型、不改 Ollama 配置。
 # 默认 qwen2.5-coder:7b —— 2026-10-25 三模型基线横向对比后选定（docs/Phase6_模型选型对比.md）

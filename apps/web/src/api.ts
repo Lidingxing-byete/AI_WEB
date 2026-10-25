@@ -71,6 +71,15 @@ export interface PhenomMatch {
 }
 
 /** 模型层状态（本地 Ollama；云端未启用时为空）。 */
+export interface CloudStatus {
+  provider: string
+  base_url: string
+  model: string
+  configured: boolean
+  available: boolean
+  reason: string
+}
+
 export interface LlmStatus {
   enabled: boolean
   provider: string
@@ -79,7 +88,10 @@ export interface LlmStatus {
   available: boolean
   reason: string
   models: string[]
+  preferred: string
+  active_hint: string
   cloud_provider: string
+  cloud: CloudStatus
   note: string
 }
 
@@ -296,7 +308,7 @@ export const api = {
    * 补充材料后重新诊断（同步）。
    * 走的是与 SSE 完全相同的引擎路径，不存在两套诊断逻辑。
    */
-  reassess: (id: string, useLlm = false) =>
+  reassess: (id: string, useLlm = false, provider = 'auto') =>
     req<{
       status: string
       hypotheses: any[]
@@ -304,7 +316,10 @@ export const api = {
       followups: string[]
       tool_runs: any[]
       llm_narrative: LlmNarrative | null
-    }>(`/tasks/${id}/reassess?use_llm=${useLlm ? 1 : 0}`, { method: 'POST' }),
+    }>(
+      `/tasks/${id}/reassess?use_llm=${useLlm ? 1 : 0}&provider=${encodeURIComponent(provider)}`,
+      { method: 'POST' },
+    ),
 
   getHypotheses: (id: string) => req<{ items: Hypothesis[] }>(`/tasks/${id}/hypotheses`),
 
@@ -345,10 +360,11 @@ export function openDiagnoseStream(
     onClose?: () => void
   },
   useLlm = false,
+  provider = 'auto',
 ): () => void {
   // use_llm 默认 0：默认诊断路径是纯规则层，不依赖模型可用性
   const es = new EventSource(
-    `${API}/tasks/${taskId}/diagnose?use_llm=${useLlm ? 1 : 0}`,
+    `${API}/tasks/${taskId}/diagnose?use_llm=${useLlm ? 1 : 0}&provider=${encodeURIComponent(provider)}`,
   )
   const types = [
     'step_start',

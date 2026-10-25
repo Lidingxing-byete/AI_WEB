@@ -11,10 +11,18 @@ import { Card, EvidenceTag } from './EvidenceTag'
  *     而不是悄悄消失或假装成功。
  */
 export function LlmPanel() {
-  const { llmNarrative, llmStatus, useLlm, setUseLlm, streaming } = useStore()
+  const { llmNarrative, llmStatus, useLlm, setUseLlm, llmPreferred,
+          setLlmPreferred, streaming } = useStore()
 
   const online = llmStatus?.available ?? false
   const model = llmNarrative?.model || llmStatus?.model || '未接入'
+  const cloud = llmStatus?.cloud
+
+  const PROVIDERS: { value: 'auto' | 'local' | 'cloud'; label: string }[] = [
+    { value: 'auto', label: '自动（云端优先）' },
+    { value: 'local', label: '本地 Ollama' },
+    { value: 'cloud', label: '云端 DeepSeek' },
+  ]
 
   return (
     <Card
@@ -49,6 +57,49 @@ export function LlmPanel() {
             </span>
           ) : null}
         </div>
+
+        {/* 模型来源切换：自动 / 本地 Ollama / 云端 DeepSeek */}
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="text-ink-400">模型来源</span>
+          {PROVIDERS.map((p) => (
+            <label
+              key={p.value}
+              className="flex cursor-pointer items-center gap-1 text-ink-600"
+            >
+              <input
+                type="radio"
+                name="llm-provider"
+                value={p.value}
+                checked={llmPreferred === p.value}
+                disabled={streaming}
+                onChange={() => setLlmPreferred(p.value)}
+                className="h-3 w-3 accent-blue-600"
+              />
+              {p.label}
+            </label>
+          ))}
+        </div>
+
+        {/* 云端状态（未配置时如实显示，不假装已接入） */}
+        {cloud && (
+          <div
+            className={`rounded border px-2 py-1.5 text-[11px] ${
+              cloud.available
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-ink-200 bg-ink-50 text-ink-500'
+            }`}
+          >
+            <span className="font-mono">{cloud.provider}</span>
+            <span className="mx-1.5">·</span>
+            <span className="font-mono">{cloud.model}</span>
+            <span className="mx-1.5">·</span>
+            {cloud.configured
+              ? cloud.available
+                ? '云端在线'
+                : `云端不可达：${cloud.reason}`
+              : '云端未配置（API 密钥留空，自动走本地/规则层）'}
+          </div>
+        )}
 
         {!useLlm && (
           <div className="text-[11px] text-ink-400">

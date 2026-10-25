@@ -58,6 +58,8 @@ interface State {
   llmStatus: LlmStatus | null
   llmNarrative: LlmNarrative | null
   useLlm: boolean
+  /** 模型来源偏好：auto（云端就绪优先）/ local / cloud（失败自动降级） */
+  llmPreferred: 'auto' | 'local' | 'cloud'
 
   error: string | null
 
@@ -76,6 +78,7 @@ interface State {
   /** 探测本地模型是否可用（只读，不加载模型、不下载模型） */
   loadLlmStatus: () => Promise<void>
   setUseLlm: (on: boolean) => void
+  setLlmPreferred: (p: 'auto' | 'local' | 'cloud') => void
   /** 补充实测波特率后重新诊断（多步诊断的第二步） */
   submitObservedBaud: (baud: number, source: string) => Promise<void>
   /** 提交硬件实测抓帧（Phase 5）。raw 必须由用户粘贴，服务端拒绝空值。 */
@@ -115,10 +118,17 @@ export const useStore = create<State>((set, get) => ({
   // 默认开启模型解读：这是"AI 技术深度"的展示面。
   // 但后端 use_llm 默认 0，且模型不可用时自动降级——演示不会因此中断。
   useLlm: true,
+  // 模型来源偏好（与后端 XZ_LLM_PREFERRED 对应，前端可运行时切换）：
+  // auto=云端就绪优先否则本地；local=固定本地；cloud=固定云端（失败自动降级本地）
+  llmPreferred: 'auto',
   error: null,
 
   async setUseLlm(on: boolean) {
     set({ useLlm: on })
+  },
+
+  async setLlmPreferred(p: 'auto' | 'local' | 'cloud') {
+    set({ llmPreferred: p })
   },
 
   async checkHealth() {
@@ -255,7 +265,7 @@ export const useStore = create<State>((set, get) => ({
         }
       },
       onClose: () => finish(),
-    }, get().useLlm)
+    }, get().useLlm, get().llmPreferred)
     })
   },
 
@@ -306,7 +316,7 @@ export const useStore = create<State>((set, get) => ({
       match,
       recorded_by: 'Zero',
     })
-    await api.reassess(id, get().useLlm)
+    await api.reassess(id, get().useLlm, get().llmPreferred)
     await get().refreshResults()
   },
 
@@ -336,7 +346,7 @@ export const useStore = create<State>((set, get) => ({
     await api.patchTask(id, { observed_baud: baud, observed_baud_source: source })
     const t = await api.getTask(id)
     set({ task: t })
-    await api.reassess(id, get().useLlm)
+    await api.reassess(id, get().useLlm, get().llmPreferred)
     await get().refreshResults()
   },
 
@@ -359,7 +369,7 @@ export const useStore = create<State>((set, get) => ({
       note: meta.note ?? '',
       observed_baud: meta.observed_baud,
     })
-    await api.reassess(id, get().useLlm)
+    await api.reassess(id, get().useLlm, get().llmPreferred)
     await get().refreshResults()
   },
 

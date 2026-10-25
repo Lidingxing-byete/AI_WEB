@@ -14,7 +14,7 @@ from __future__ import annotations
 import sys
 
 from app.config import LLM_MODEL
-from app.llm.client import LlmCallRecord, OllamaClient, OllamaUnavailable
+from app.llm.client import CloudUnavailable, LlmCallRecord, OllamaClient, OllamaUnavailable
 from app.llm.guard import validate
 from app.llm.service import LlmService
 
@@ -134,6 +134,95 @@ def offline() -> None:
     check("云端未配置即视为未接入（不虚报）", s8._cloud_ready() is False)
 
 
+class FakeCloudClient:
+    """DeepSeek 云端客户端替身。仅测试注入用（注入视为就绪）。"""
+
+    def __init__(self, response: str = "", healthy: bool = True,
+                 raise_exc: Exception | None = None,
+                 model: str = "deepseek-chat") -> None:
+        self.model = model
+        self.base_url = "https://fake.deepseek"
+        self._resp = response
+        self._healthy = healthy
+        self._exc = raise_exc
+        self.calls = 0
+
+    def health(self, timeout_s: float = 5.0) -> bool:
+        return self._healthy
+
+    def generate(self, prompt: str, system: str = "",
+                 json_mode: bool = True) -> tuple[str, LlmCallRecord]:
+        self.calls += 1
+        if self._exc is not None:
+            raise self._exc
+        rec = LlmCallRecord(provider="deepseek-cloud", model=self.model,
+                            ok=True, duration_ms=15, prompt_chars=len(prompt),
+                            response_chars=len(self._resp))
+        return self._resp, rec
+
+
+def cloud() -> None:
+    """云端（DeepSeek）切换与降级链（离线替身）。"""
+    print("—— 云端切换与降级（离线替身）——")
+    good = '{"summary":"云端：时钟未使能导致寄存器读写无效。","extra_steps":[],"cautions":[]}'
+    bad = "不是 JSON"
+
+    c1 = LlmService(client=FakeClient(good),                    # type: ignore[arg-type]
+                    cloud_client=FakeCloudClient(good),         # type: ignore[arg-type]
+                    preferred="auto")
+    n1 = c1.narrate("串口无输出", CAND, [], [])
+    check("auto+云端就绪 → 走云端", n1.available and n1.provider == "deepseek-cloud",
+          n1.provider)
+    check("云端输出恒为 [推断]", n1.tag == "[推断]", n1.tag)
+
+    c2 = LlmService(client=FakeClient(good),                    # type: ignore[arg-type]
+                    cloud_client=FakeCloudClient(raise_exc=CloudUnavailable("401 Unauthorized")),
+                    preferred="auto")                            # type: ignore[arg-type]
+    n2 = c2.narrate("串口无输出", CAND, [], [])
+    check("云端失败 → 自动降级本地", n2.available and n2.provider == "ollama-local",
+          n2.provider)
+    check("云端确实被尝试过", c2._cloud_client.calls == 1,   # type: ignore[union-attr]
+          str(c2._cloud_client.calls))                       # type: ignore[union-attr]
+
+    c3 = LlmService(client=FakeClient(good),                    # type: ignore[arg-type]
+                    cloud_client=FakeCloudClient(good),         # type: ignore[arg-type]
+                    preferred="local")
+    n3 = c3.narrate("串口无输出", CAND, [], [])
+    check("preferred=local → 只用本地", n3.provider == "ollama-local",
+          n3.provider)
+    check("local 时不碰云端", c3._cloud_client.calls == 0,  # type: ignore[union-attr]
+          str(c3._cloud_client.calls))                       # type: ignore[union-attr]
+
+    c4 = LlmService(client=FakeClient("", raise_exc=OllamaUnavailable("本地拒绝")),  # type: ignore[arg-type]
+                    cloud_client=FakeCloudClient(raise_exc=CloudUnavailable("云端超时")),
+                    preferred="cloud")                        # type: ignore[arg-type]
+    n4 = c4.narrate("串口无输出", CAND, [], [])
+    check("双端失败 → 降级规则层且记录两端原因", n4.degraded
+          and "云端超时" in n4.reason and "本地拒绝" in n4.reason, n4.reason)
+
+    c5 = LlmService(client=FakeClient(good),                    # type: ignore[arg-type]
+                    cloud_client=FakeCloudClient(good),         # type: ignore[arg-type]
+                    preferred="auto")
+    st = c5.status(probe=True)
+    check("status 含云端配置与可用态", st["cloud"]["configured"]
+          and st["cloud"]["available"] and st["active_hint"] == "cloud",
+          str(st["cloud"]))
+    check("status 含偏好字段", st["preferred"] == "auto", st["preferred"])
+
+    c6 = LlmService(client=FakeClient(good),                    # type: ignore[arg-type]
+                    cloud_client=FakeCloudClient(good),         # type: ignore[arg-type]
+                    preferred="local")
+    check("preferred=local → active_hint=local",
+          c6.status(probe=True)["active_hint"] == "local",
+          c6.status(probe=True)["active_hint"])
+
+    c7 = LlmService(client=FakeClient(good),                    # type: ignore[arg-type]
+                    cloud_client=FakeCloudClient(healthy=False),
+                    preferred="auto")                           # type: ignore[arg-type]
+    ok, why = c7.cloud_probe(force=True)
+    check("云端探测失败如实报告", (not ok) and "不可达" in why, why)
+
+
 def online() -> None:
     print("—— 在线（本机 Ollama）——")
     svc = LlmService()
@@ -156,6 +245,7 @@ def online() -> None:
 
 if __name__ == "__main__":
     offline()
+    cloud()
     online()
     print()
     print(f"结果：通过 {PASS} · 失败 {FAIL}")

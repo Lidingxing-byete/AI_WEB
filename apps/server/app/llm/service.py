@@ -26,9 +26,10 @@ import time
 
 from ..config import (CLOUD_API_KEY, CLOUD_BASE_URL, CLOUD_MODEL,
                       CLOUD_PROVIDER, LLM_ENABLED, LLM_HEALTH_CACHE_S,
-                      LLM_MODEL)
+                      LLM_MODEL, LLM_PREFERRED, OLLAMA_HOST)
 from ..engine.evidence import EvidenceTag
-from .client import PROVIDER_LOCAL, OllamaClient, OllamaUnavailable
+from .client import (PROVIDER_CLOUD, PROVIDER_LOCAL, CloudClient,
+                     CloudUnavailable, OllamaClient, OllamaUnavailable)
 from .guard import VERDICT_OK, validate
 from .prompts import (BASELINE_SYSTEM, NARRATE_SYSTEM,
                       build_baseline_prompt, build_narrate_prompt)
@@ -82,24 +83,58 @@ class LlmNarrative:
 
 
 class LlmService:
-    """模型服务。构造极轻，不自动联网。"""
+    """模型服务。构造极轻，不自动联网。
+
+    `preferred` 决定来源偏好（与前端选择器一致）：
+      - `local`：固定本地 Ollama；
+      - `cloud`：固定云端 DeepSeek（失败自动降级本地）；
+      - `auto`：云端就绪（配置完整）优先，否则本地。
+    任何来源失败都会继续尝试下一个，最终不可用才降级规则层。
+    """
 
     def __init__(self, client: OllamaClient | None = None,
-                 enabled: bool | None = None) -> None:
+                 cloud_client: CloudClient | None = None,
+                 enabled: bool | None = None,
+                 preferred: str | None = None) -> None:
         self.enabled = LLM_ENABLED if enabled is None else enabled
         self.client = client or OllamaClient()
+        self.preferred = (preferred or LLM_PREFERRED).strip().lower()
+        self._cloud_client = cloud_client
         self._health_at = 0.0
         self._health_ok = False
+        self._cloud_health_at = 0.0
+        self._cloud_health_ok = False
         self._models: list[str] = []
 
     # ------------------------------------------------------------------
     def _cloud_ready(self) -> bool:
-        """云端是否**配置完整**。缺任意一项即视为未启用（不猜、不半配）。"""
+        """云端是否可用：显式注入的客户端视为就绪（测试用）；
+        运行时默认路径要求**配置完整**——缺任意一项即视为未启用（不猜、不半配）。"""
+        if self._cloud_client is not None:
+            return True
         return bool(CLOUD_PROVIDER and CLOUD_BASE_URL and CLOUD_MODEL
                     and CLOUD_API_KEY)
 
+    def _get_cloud_client(self) -> CloudClient | None:
+        """惰性构造云端客户端：只有就绪才创建（不配置绝不联网）。"""
+        if not self._cloud_ready():
+            return None
+        if self._cloud_client is None:
+            self._cloud_client = CloudClient()
+        return self._cloud_client
+
+    def _order(self) -> list[str]:
+        """按偏好计算尝试顺序：['cloud'|'local', ...]，最终必含 'local'。"""
+        cloud_ok = self._cloud_ready()
+        if self.preferred == "cloud":
+            return ["cloud", "local"]
+        if self.preferred == "local":
+            return ["local"]
+        return ["cloud", "local"] if cloud_ok else ["local"]
+
+    # ------------------------------------------------------------------
     def probe(self, force: bool = False) -> tuple[bool, str]:
-        """探测模型可用性，带短期缓存（避免每轮诊断都打一次 /api/tags）。"""
+        """本地模型可用性探测，带短期缓存（避免每轮诊断都打一次 /api/tags）。"""
         if not self.enabled:
             return False, "模型未启用（XZ_LLM_ENABLED=0）"
         now = time.time()
@@ -119,40 +154,51 @@ class LlmService:
                            f"本机已拉取：{', '.join(models[:6])}")
         return True, ""
 
+    def cloud_probe(self, force: bool = False) -> tuple[bool, str]:
+        """云端可用性探测（鉴权 + 可达，GET /models，不触发计费推理）。"""
+        if not self._cloud_ready():
+            return False, "云端未配置（XZ_CLOUD_API_KEY 留空）"
+        now = time.time()
+        if not force and now - self._cloud_health_at < LLM_HEALTH_CACHE_S:
+            return self._cloud_health_ok, ("" if self._cloud_health_ok
+                                           else "云端服务不可达")
+        cc = self._get_cloud_client()
+        ok = bool(cc and cc.health())
+        self._cloud_health_at = now
+        self._cloud_health_ok = ok
+        if not ok:
+            return False, f"云端服务不可达（{CLOUD_BASE_URL}）"
+        return True, ""
+
     # ------------------------------------------------------------------
-    def narrate(
+    def _narrate_via(
         self,
+        client: OllamaClient | CloudClient,
+        provider_label: str,
         symptom_text: str,
         candidates: list[dict],
         unknowns: list[dict],
         references: list[dict],
     ) -> LlmNarrative:
-        """对已查出的结论做解释，并补充验证建议。
-
-        失败一律降级：返回 degraded 对象并写明原因，绝不抛异常。
-        """
-        ok, why = self.probe()
-        if not ok:
-            return LlmNarrative(False, True, why, model=self.client.model)
-
+        """用指定客户端执行一次模型解读（同一 prompt / 同一守卫）。"""
         prompt = build_narrate_prompt(symptom_text, candidates,
                                       unknowns, references)
         t0 = time.perf_counter()
         try:
-            raw, rec = self.client.generate(prompt, system=NARRATE_SYSTEM,
-                                            json_mode=True)
-        except OllamaUnavailable as exc:
+            raw, rec = client.generate(prompt, system=NARRATE_SYSTEM,
+                                       json_mode=True)
+        except (OllamaUnavailable, CloudUnavailable) as exc:
             return LlmNarrative(
-                False, True, f"模型调用失败，已降级为规则层输出：{exc}",
-                provider=PROVIDER_LOCAL, model=self.client.model,
+                False, True, f"{provider_label} 调用失败：{exc}",
+                provider=provider_label, model=client.model,
                 duration_ms=int((time.perf_counter() - t0) * 1000),
                 call={"ok": False, "error": str(exc)[:200]},
             )
         except Exception as exc:                          # noqa: BLE001
             return LlmNarrative(
-                False, True, f"模型调用异常，已降级为规则层输出："
+                False, True, f"{provider_label} 调用异常："
                              f"{type(exc).__name__}: {exc}",
-                provider=PROVIDER_LOCAL, model=self.client.model,
+                provider=provider_label, model=client.model,
                 duration_ms=int((time.perf_counter() - t0) * 1000),
             )
 
@@ -162,20 +208,91 @@ class LlmService:
             # 如实记录原因，降级显示规则层结论。
             return LlmNarrative(
                 False, True,
-                f"模型输出未通过证据纪律守卫（{checked['reason']}），"
-                f"已丢弃该段输出，仅展示规则层结论",
-                provider=PROVIDER_LOCAL, model=self.client.model,
+                f"{provider_label} 输出未通过证据纪律守卫"
+                f"（{checked['reason']}），已丢弃该段输出，仅展示规则层结论",
+                provider=provider_label, model=rec.model,
                 duration_ms=rec.duration_ms, call=rec.to_dict(),
             )
 
         return LlmNarrative(
-            True, False, "", provider=PROVIDER_LOCAL,
-            model=self.client.model, duration_ms=rec.duration_ms,
+            True, False, "", provider=provider_label,
+            model=rec.model, duration_ms=rec.duration_ms,
             summary=checked["summary"],
             extra_steps=checked["extra_steps"],
             cautions=checked["cautions"],
             call=rec.to_dict(),
         )
+
+    def narrate(
+        self,
+        symptom_text: str,
+        candidates: list[dict],
+        unknowns: list[dict],
+        references: list[dict],
+    ) -> LlmNarrative:
+        """对已查出的结论做解释，并补充验证建议。
+
+        按偏好顺序尝试（云端→本地），**失败一律降级**：
+        返回 degraded 对象并写明原因，绝不抛异常。
+        """
+        if not self.enabled:
+            return LlmNarrative(False, True, "模型未启用（XZ_LLM_ENABLED=0）")
+
+        attempts: list[str] = []
+        for p in self._order():
+            if p == "cloud":
+                cc = self._get_cloud_client()
+                if cc is None:
+                    attempts.append("云端未配置（跳过）")
+                    continue
+                out = self._narrate_via(cc, PROVIDER_CLOUD, symptom_text,
+                                        candidates, unknowns, references)
+            else:
+                ok, why = self.probe()
+                if not ok:
+                    attempts.append(why)
+                    continue
+                out = self._narrate_via(self.client, PROVIDER_LOCAL,
+                                        symptom_text, candidates,
+                                        unknowns, references)
+            if out.available:
+                return out
+            attempts.append(out.reason or f"{out.provider} 无输出")
+
+        return LlmNarrative(
+            False, True, f"模型解读不可用，已降级为规则层输出："
+                         f"{'；'.join(a for a in attempts if a)}",
+        )
+
+    def status(self, probe: bool = True) -> dict:
+        """本地 + 云端双状态，供 /api/llm/status 与前端面板展示。"""
+        l_ok, l_why = self.probe(force=probe)
+        cloud_ready = self._cloud_ready()
+        c_ok, c_why = self.cloud_probe(force=probe) if cloud_ready \
+            else (False, "云端未配置（XZ_CLOUD_API_KEY 留空）")
+        return {
+            "enabled": self.enabled,
+            "provider": PROVIDER_LOCAL,
+            "host": OLLAMA_HOST,
+            "model": LLM_MODEL,
+            "available": l_ok,
+            "reason": l_why,
+            "models": self.client.list_models() if l_ok else [],
+            "preferred": self.preferred,
+            "active_hint": ("cloud" if (self.preferred in ("cloud", "auto")
+                                        and cloud_ready and c_ok) else "local"),
+            "cloud_provider": CLOUD_PROVIDER,
+            "cloud": {
+                "provider": CLOUD_PROVIDER,
+                "base_url": CLOUD_BASE_URL,
+                "model": CLOUD_MODEL,
+                "configured": cloud_ready,
+                "available": c_ok,
+                "reason": c_why,
+            },
+            "note": ("模型仅用于解释已查出的结论与补充验证建议，"
+                     "输出恒为 [推断]，不参与根因判定；不可用时自动降级"),
+        }
 
     # ------------------------------------------------------------------
     def baseline(self, source_code: str, symptom_text: str,
@@ -219,5 +336,5 @@ class LlmService:
                 "model": self.client.model}
 
 
-def default_service() -> LlmService:
-    return LlmService()
+def default_service(preferred: str | None = None) -> LlmService:
+    return LlmService(preferred=preferred)

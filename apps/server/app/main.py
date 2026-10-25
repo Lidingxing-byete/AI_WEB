@@ -302,16 +302,18 @@ def _load_request(tid: str, use_llm: bool = False) -> DiagnosticRequest:
 
 
 @app.get("/api/tasks/{tid}/diagnose")
-def diagnose_stream(tid: str, use_llm: bool = False) -> StreamingResponse:
+def diagnose_stream(tid: str, use_llm: bool = False,
+                    provider: str = "") -> StreamingResponse:
     """SSE：触发诊断并流式推送**真实执行过程**。
 
     `use_llm=1` 时启用模型解读（T-08）。默认关闭：
     默认路径保持纯规则层，不依赖模型可用性。
+    `provider`（可选）：local / cloud / auto，覆盖服务端默认偏好。
     """
     _task_or_404(tid)
     req = _load_request(tid, use_llm=use_llm)
     if use_llm:
-        _engine.llm = _llm_service()
+        _engine.llm = _llm_service(preferred=provider)
 
     q: queue.Queue[tuple[str, dict] | None] = queue.Queue()
 
@@ -355,17 +357,19 @@ def diagnose_stream(tid: str, use_llm: bool = False) -> StreamingResponse:
 
 
 @app.post("/api/tasks/{tid}/reassess")
-def reassess(tid: str, use_llm: bool = False) -> dict:
+def reassess(tid: str, use_llm: bool = False,
+             provider: str = "") -> dict:
     """补充材料后**重新诊断**（同步端点）。
 
     用途：用户在回填实测波特率 / 实际晶振等信息后再次触发诊断，
     走的是与 SSE 完全相同的引擎路径，因此结论与流式诊断一致——
     不存在"两条诊断逻辑"。返回本次新产生的候选与仍需补充的信息。
+    `provider`（可选）：local / cloud / auto，覆盖服务端默认偏好。
     """
     _task_or_404(tid)
     req = _load_request(tid, use_llm=use_llm)
     if use_llm:
-        _engine.llm = _llm_service()
+        _engine.llm = _llm_service(preferred=provider)
     report = _engine.run(req)
     _persist_report(tid, report)
     return {
@@ -387,33 +391,26 @@ def reassess(tid: str, use_llm: bool = False) -> dict:
 _llm: Any = None
 
 
-def _llm_service() -> Any:
-    """惰性创建模型服务：构造引擎/启动服务时都不应触发网络探测。"""
+def _llm_service(preferred: str = "") -> Any:
+    """惰性创建模型服务：构造引擎/启动服务时都不应触发网络探测。
+
+    `preferred` 非空时按请求覆盖默认偏好（local / cloud / auto）。
+    """
     global _llm
     if _llm is None:
         from app.llm.service import LlmService
         _llm = LlmService()
+    if preferred:
+        from app.llm.service import LlmService
+        return LlmService(preferred=preferred)
     return _llm
 
 
 @app.get("/api/llm/status")
 def llm_status(probe: bool = True) -> dict:
-    """模型层可用状态。供前端显示"模型在线/离线"，避免假装在跑。"""
+    """模型层可用状态（本地 + 云端双来源）。供前端面板展示与选择器使用。"""
     svc = _llm_service()
-    ok, why = svc.probe(force=probe)
-    return {
-        "enabled": svc.enabled,
-        "provider": "ollama-local",
-        "host": OLLAMA_HOST,
-        "model": LLM_MODEL,
-        "available": ok,
-        "reason": why,
-        "models": svc.client.list_models() if ok else [],
-        # 云端未配置时明确为空——不允许把"未启用"说成"已接入"
-        "cloud_provider": "",
-        "note": ("模型仅用于解释已查出的结论与补充验证建议，"
-                 "输出恒为 [推断]，不参与根因判定；不可用时自动降级"),
-    }
+    return svc.status(probe=probe)
 
 
 @app.get("/api/tasks/{tid}/llm-calls")

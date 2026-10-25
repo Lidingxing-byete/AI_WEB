@@ -26,13 +26,15 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
-from ..config import (LLM_MAX_TOKENS, LLM_MODEL, LLM_TEMPERATURE,
-                      LLM_TIMEOUT_S, OLLAMA_HOST)
+from ..config import (CLOUD_API_KEY, CLOUD_BASE_URL, CLOUD_MODEL,
+                      CLOUD_TIMEOUT_S, LLM_MAX_TOKENS, LLM_MODEL,
+                      LLM_TEMPERATURE, LLM_TIMEOUT_S, OLLAMA_HOST)
 
 # 绕过系统代理直连本机（否则 urllib 会把 127.0.0.1 也发给代理）
 _NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 PROVIDER_LOCAL = "ollama-local"
+PROVIDER_CLOUD = "deepseek-cloud"
 
 
 class OllamaUnavailable(RuntimeError):
@@ -182,4 +184,131 @@ class OllamaClient:
         rec.raw_response = text
         if isinstance(data.get("eval_count"), int):
             rec.eval_count = data["eval_count"]
+        return text, rec
+
+
+class CloudUnavailable(RuntimeError):
+    """云端不可达 / 鉴权失败 / 超时 / 返回非 200。
+
+    与 `OllamaUnavailable` 同语义：调用方必须捕获并降级，
+    绝不能让它冒到编排层。
+    """
+
+
+class CloudClient:
+    """云端 OpenAI 兼容客户端（DeepSeek `/chat/completions`），仅标准库。
+
+    与 `OllamaClient` 保持**相同的 `generate()` 接口**，`LlmService`
+    无需区分两者即可完成降级链调度。
+
+    工程细节：
+    1. **走系统代理**：云端是远端服务，必须经代理出口——与本地
+       Ollama 显式绕代理相反，这里用默认 opener（自动读代理环境变量）。
+    2. **json_mode**：DeepSeek 支持 `response_format={"type":"json_object"}`
+       约束结构化输出；守卫（guard.py）仍必须独立校验，不依赖它。
+    3. **鉴权失败（401/403）与欠费（402）**：按错误码如实记录，不猜测。
+    """
+
+    def __init__(
+        self,
+        base_url: str = CLOUD_BASE_URL,
+        api_key: str = CLOUD_API_KEY,
+        model: str = CLOUD_MODEL,
+        timeout_s: float = CLOUD_TIMEOUT_S,
+        temperature: float = LLM_TEMPERATURE,
+        num_predict: int = LLM_MAX_TOKENS,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model = model
+        self.timeout_s = timeout_s
+        self.temperature = temperature
+        self.num_predict = num_predict
+
+    # ------------------------------------------------------------------
+    def health(self, timeout_s: float = 5.0) -> bool:
+        """鉴权 + 可达性轻量探测（GET /models），不触发计费推理。"""
+        try:
+            req = urllib.request.Request(
+                f"{self.base_url}/models",
+                method="GET",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                return resp.status == 200
+        except Exception:                                  # noqa: BLE001
+            return False
+
+    # ------------------------------------------------------------------
+    def generate(
+        self,
+        prompt: str,
+        system: str = "",
+        json_mode: bool = True,
+    ) -> tuple[str, LlmCallRecord]:
+        """调用 /chat/completions，返回 (原始文本, 调用记录)。"""
+        rec = LlmCallRecord(provider=PROVIDER_CLOUD, model=self.model,
+                            temperature=self.temperature,
+                            num_predict=self.num_predict, prompt_chars=len(prompt))
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "max_tokens": self.num_predict,
+            "stream": False,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
+        )
+
+        t0 = time.perf_counter()
+        try:
+            # 云端走默认 opener（自动使用系统代理），不传 _NO_PROXY
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                raw = resp.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as exc:
+            rec.duration_ms = int((time.perf_counter() - t0) * 1000)
+            rec.error = f"HTTP {exc.code}: {exc.reason}"
+            raise CloudUnavailable(rec.error) from exc
+        except Exception as exc:                           # noqa: BLE001
+            rec.duration_ms = int((time.perf_counter() - t0) * 1000)
+            rec.error = f"{type(exc).__name__}: {exc}"
+            raise CloudUnavailable(rec.error) from exc
+        rec.duration_ms = int((time.perf_counter() - t0) * 1000)
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            rec.error = f"响应非 JSON：{raw[:120]}"
+            raise CloudUnavailable(rec.error) from exc
+
+        if data.get("error"):
+            rec.error = str(data["error"])[:300]
+            raise CloudUnavailable(rec.error)
+
+        try:
+            text = str(data["choices"][0]["message"]["content"] or "")
+        except (KeyError, IndexError, TypeError) as exc:
+            rec.error = f"响应缺少 choices[0].message.content：{raw[:120]}"
+            raise CloudUnavailable(rec.error) from exc
+
+        rec.ok = True
+        rec.response_chars = len(text)
+        rec.raw_response = text
+        if isinstance(data.get("usage", {}).get("completion_tokens"), int):
+            rec.eval_count = data["usage"]["completion_tokens"]
         return text, rec
