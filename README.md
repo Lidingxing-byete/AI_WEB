@@ -64,9 +64,10 @@ FastAPI (apps/server)
 ```bash
 cd apps/server
 python -m venv .venv && .venv/Scripts/activate     # Windows
-pip install fastapi "uvicorn[standard]" pydantic
-copy .env.example .env                              # 可选；留空也能跑
+pip install -r requirements.txt                    # 依赖清单（白名单 3 包：fastapi / uvicorn / pydantic）
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8787
+# 密钥类配置走环境变量（模板见 .env.example）；留空用内置默认值即可跑。
+# 注意：本系统不自动加载 .env 文件——需自定义时以环境变量方式设置，或在 uvicorn 后加 --env-file .env。
 ```
 
 ### 前端
