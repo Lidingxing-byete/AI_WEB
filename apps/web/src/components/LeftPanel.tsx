@@ -55,6 +55,9 @@ export function LeftPanel() {
     setBusy(true)
     try {
       await loadDemo(id)
+      // 若等待期间用户已点另一个样例（demoSampleId 被接管），
+      // 不要用旧样例内容覆盖输入框。
+      if (useStore.getState().demoSampleId !== id) return
       const s = await api.getSample(id)
       setCode(s.content)
       setSymptom(s.symptom)

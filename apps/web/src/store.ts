@@ -273,7 +273,8 @@ export const useStore = create<State>((set, get) => ({
     const id = get().task?.id
     if (!id) return
     try {
-      const [hy, un, re, ve, tr, runs, fu, hw, lc] = await Promise.all([
+      const [t, hy, un, re, ve, tr, runs, fu, hw, lc] = await Promise.all([
+        api.getTask(id),
         api.getHypotheses(id),
         api.getUnknowns(id),
         api.getReferences(id),
@@ -285,6 +286,9 @@ export const useStore = create<State>((set, get) => ({
         api.getLlmCalls(id),
       ])
       set({
+        // 同步任务状态：诊断完成后后端置 awaiting_verification，
+        // 左侧"当前任务"不应停留在 created。
+        task: t,
         hypotheses: hy.items,
         unknowns: un.items,
         references: re.items,
@@ -325,13 +329,16 @@ export const useStore = create<State>((set, get) => ({
    *
    * 全程标 [演示数据]：任务名带前缀，样例源码是人为注入的故障，
    * 不代表任何真实板卡现象。
+   *
+   * 诊断在后台流式执行（SSE），不阻塞调用方：这样"点另一个样例"
+   * 在诊断进行中也允许打断切换（runDiagnose 会关闭旧流再开新流）。
    */
   async loadDemo(sampleId: string) {
     const s = await api.getSample(sampleId)
     const tid = await get().newTask(`[演示数据] ${s.title}`, s.symptom)
     await get().addSource(s.content, `${sampleId}.c`)
     set({ demoSampleId: sampleId })
-    await get().runDiagnose()
+    void get().runDiagnose()
   },
 
   /**

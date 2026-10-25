@@ -377,18 +377,36 @@ export function openDiagnoseStream(
     'phenomenon_matches',
     'llm_narrative',
     'done',
-    'error',
     'closed',
   ]
   for (const t of types) {
     es.addEventListener(t, (e: MessageEvent) => {
       try {
         handlers.onEvent(t, JSON.parse(e.data))
-      } catch {
+      } catch (err) {
+        // 解析失败会把手上的 data 变成 {}，若该事件恰为 error，
+        // 会把"诊断出错"误报成错误文案。此处显式留痕便于定位。
+        console.warn(`[SSE] ${t} 事件解析失败`, e.data)
         handlers.onEvent(t, {})
       }
     })
   }
+  // 'error' 单独监听：EventSource 的原生 error（连接中断 / 服务器正常
+  // 结束关闭响应）与服务器自定义 `event: error` 同名。原生 error 事件
+  // 没有 data，必须据此区分——否则每次诊断正常结束都会被误报成
+  // "诊断出错"。原生 error 由下方 onerror 负责关闭连接。
+  es.addEventListener('error', (e: Event) => {
+    const me = e as MessageEvent
+    if (me.data === undefined || me.data === null || me.data === '') {
+      return
+    }
+    try {
+      handlers.onEvent('error', JSON.parse(me.data))
+    } catch (err) {
+      console.warn('[SSE] error 事件解析失败', me.data)
+      handlers.onEvent('error', {})
+    }
+  })
   es.onerror = () => {
     es.close()
     handlers.onClose?.()

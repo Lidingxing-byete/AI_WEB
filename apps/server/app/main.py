@@ -348,6 +348,8 @@ def diagnose_stream(tid: str, use_llm: bool = False,
             if item is None:
                 break
             etype, data = item
+            if etype == "error":
+                print(f"[DIAG] error event push: {data}", flush=True)
             yield _sse(etype, data)
         yield _sse("closed", {"duration_ms": int((time.time() - start) * 1000)})
 
