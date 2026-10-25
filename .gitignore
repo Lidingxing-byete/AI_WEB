@@ -25,6 +25,21 @@ apps/server/data/
 # ---- 赛事原始文件（组织方资料，不随公开仓库提交）----
 比赛.docx
 
+# ---- 内部过程文档（仅本地使用，公开仓库只保留网站相关）----
+/AGENTS.md
+/PROJECT_PLAN.md
+/docs/Phase0_*.md
+/docs/Phase1_*.md
+/docs/Phase2_*.md
+/docs/Phase2.5_*.md
+/docs/Phase3_*.md
+/docs/Phase4_*.md
+/docs/Phase5_*.md
+/docs/Phase6_*.md
+/docs/Phase7_*.md
+/docs/README.md
+/docs/项目进度总结_*.md
+
 # ---- 编辑器 / 系统 ----
 .vscode/
 .idea/
