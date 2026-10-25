@@ -1,0 +1,637 @@
+{
+  "_meta": {
+    "name": "L1 结构化 UART 诊断规则库",
+    "version": "0.1.0",
+    "status": "Phase 2 产出，待 Phase 3 加载与 Phase 5 实测校准",
+    "chip": "STM32F103C8T6",
+    "peripheral": "USART",
+    "library": "STM32F10x Standard Peripherals Library V3.5.0",
+    "symptom_taxonomy": {
+      "S1": "完全无输出（TX 无任何数据）",
+      "S2": "输出乱码（有数据但内容错误）",
+      "S3": "引脚/电平异常（波形缺失或电平不对）",
+      "S4": "单向通（能发不能收，或反之）",
+      "S5": "printf 无输出（直接寄存器发送正常）",
+      "S6": "中断不触发/异常触发"
+    },
+    "tool_registry": [
+      "parse_build_log",
+      "analyze_c_code",
+      "check_uart_config",
+      "calc_baud_error",
+      "search_reference",
+      "record_test_result"
+    ],
+    "evidence_discipline": "supporting_evidence 与 refuting_evidence 均为待检验的证据形态描述，不是已发生的实测结果",
+    "copyright_note": "全部条目为本项目自撰；仅做章节级引用（如 RM0008 Ch.19），不含手册原文段落，不含本地知识库原文"
+  },
+  "rules": [
+    {
+      "rule_id": "R-S1-01",
+      "symptom": "S1",
+      "candidate_cause": "USART1 外设时钟未使能",
+      "check_items": [
+        "analyze_c_code: 提取 RCC_APB2PeriphClockCmd / RCC->APB2ENR 的使能参数",
+        "check_uart_config: 校验 USART1 时钟使能位是否存在"
+      ],
+      "supporting_evidence": [
+        "代码中无 RCC_APB2Periph_USART1 使能项",
+        "使能调用被注释、或只使能了 GPIO 端口时钟",
+        "[实测-硬件] 同类其他外设（如 GPIO 点灯）功能正常，说明程序在运行"
+      ],
+      "refuting_evidence": [
+        "代码中明确包含 RCC_APB2Periph_USART1（或 AFIO 一并使能）",
+        "[实测-硬件] 示波器/逻辑分析仪在 TX 引脚测到预期波形"
+      ],
+      "source_ref": "RM0008 Ch.7 RCC（APB2 外设时钟使能）",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "F0/F4/L 系列使能寄存器名、总线归属不同，不得直接套用本条位号",
+      "verification_steps": [
+        "确认 RCC_APB2ENR 中 USART1 使能位已置位",
+        "重新编译烧录后观察串口输出是否恢复",
+        "若仍无输出，转入 R-S1-03 检查 TX 引脚模式"
+      ],
+      "linked_case": "C1"
+    },
+    {
+      "rule_id": "R-S1-02",
+      "symptom": "S1",
+      "candidate_cause": "GPIO 端口时钟未使能",
+      "check_items": [
+        "analyze_c_code: 提取 GPIO 端口时钟使能项",
+        "check_uart_config: 校验所用端口（如 GPIOA）时钟是否使能"
+      ],
+      "supporting_evidence": [
+        "只使能了 USART 时钟，未使能对应 GPIO 端口时钟",
+        "引脚配置代码存在但端口时钟缺失"
+      ],
+      "refuting_evidence": [
+        "RCC_APB2ENR 中对应 IOPx 使能位已置位",
+        "同端口其他引脚功能正常"
+      ],
+      "source_ref": "RM0008 Ch.7 RCC / Ch.9 GPIO",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "GPIO 时钟均在 APB2（F1 系列）；其他系列可能为 AHB/AHB2 总线",
+      "verification_steps": [
+        "在 USART 时钟使能语句中补上 GPIO 端口时钟",
+        "确认初始化顺序：先开时钟再配置引脚"
+      ],
+      "linked_case": "C1"
+    },
+    {
+      "rule_id": "R-S1-03",
+      "symptom": "S1",
+      "candidate_cause": "TX 引脚未配置为复用推挽输出（AF_PP）",
+      "check_items": [
+        "analyze_c_code: 提取 TX 引脚的 GPIO_Mode 与 GPIO_Speed",
+        "check_uart_config: 校验 TX 引脚模式应为 GPIO_Mode_AF_PP"
+      ],
+      "supporting_evidence": [
+        "GPIO_Mode 为 IN_FLOATING / IPU / Out_OD 等非 AF_PP",
+        "GPIO_Speed 未设置（默认可低至 2MHz，高速波特率下波形畸变）"
+      ],
+      "refuting_evidence": [
+        "TX 引脚明确配置为 GPIO_Mode_AF_PP 且速度已设置",
+        "[实测-硬件] TX 引脚测得空闲高电平与起跳沿"
+      ],
+      "source_ref": "RM0008 Ch.9 GPIO（复用功能配置）",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "HAL 库表述为 GPIO_MODE_AF_PP；本条模式名仅适用于 SPL",
+      "verification_steps": [
+        "将 TX 引脚改为 GPIO_Mode_AF_PP，建议速度 50MHz",
+        "保留 RX 引脚为输入模式",
+        "重测串口输出"
+      ],
+      "linked_case": "C3"
+    },
+    {
+      "rule_id": "R-S1-04",
+      "symptom": "S1",
+      "candidate_cause": "使用了重映射引脚但未开启 AFIO 时钟与重映射配置",
+      "check_items": [
+        "analyze_c_code: 是否调用 GPIO_PinRemapConfig",
+        "check_uart_config: 校验 AFIO 时钟使能（RCC_APB2Periph_AFIO）"
+      ],
+      "supporting_evidence": [
+        "代码使用 PB6/PB7 作为 USART1，但无 GPIO_PinRemapConfig(GPIO_Remap_USART1, ENABLE)",
+        "有重映射调用但 AFIO 时钟未使能"
+      ],
+      "refuting_evidence": [
+        "使用默认引脚 PA9/PA10 且未启用重映射",
+        "AFIO 时钟与 GPIO_Remap_USART1 均已正确配置"
+      ],
+      "source_ref": "RM0008 Ch.9 GPIO（AFIO 重映射）",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "F1 需 AFIO 时钟；F4 及以后改用 GPIO_PinAFConfig，机制不同",
+      "verification_steps": [
+        "使能 RCC_APB2Periph_AFIO",
+        "调用 GPIO_PinRemapConfig(GPIO_Remap_USART1, ENABLE)",
+        "确认物理接线接在 PB6(TX)/PB7(RX)"
+      ],
+      "linked_case": "C4"
+    },
+    {
+      "rule_id": "R-S1-05",
+      "symptom": "S1",
+      "candidate_cause": "物理接线错误（TX/RX 未交叉，或未共地）",
+      "check_items": [
+        "check_uart_config: 无法判定，需提示用户检查硬件连接",
+        "record_test_result: 由用户回填写接线检查结果"
+      ],
+      "supporting_evidence": [
+        "[实测-硬件] 短接 USB-TTL 的 TX 与 RX 自发自收正常，而接目标板无数据",
+        "[实测-硬件] 目标板与 USB-TTL 未共地"
+      ],
+      "refuting_evidence": [
+        "[实测-硬件] 自发自收与目标板连接均正常",
+        "[实测-硬件] 示波器在目标板 TX 引脚测到波形（说明板侧已发出，问题在链路）"
+      ],
+      "source_ref": "本项目归纳（硬件连接通用实践），非手册内容",
+      "applicable_chip": "不限",
+      "library": "不限",
+      "not_applicable_note": "本条为硬件层，静态分析无法判定，必须用户实测确认",
+      "verification_steps": [
+        "确认 USB-TTL 的 RX 接目标板 TX、TX 接目标板 RX",
+        "确认两侧 GND 已连接",
+        "先做 USB-TTL 自发自收测试排除转换器本身故障"
+      ],
+      "static_analysis_only": true,
+      "linked_case": null
+    },
+    {
+      "rule_id": "R-S1-06",
+      "symptom": "S1",
+      "candidate_cause": "电平标准不匹配（TTL 与 RS232 直连）",
+      "check_items": [
+        "check_uart_config: 无法判定，需用户说明所用转换器类型"
+      ],
+      "supporting_evidence": [
+        "使用了 DB9 RS232 接口或 MAX232 未接入",
+        "[实测-硬件] 测量到的电平幅度超出 0~3.3V 范围"
+      ],
+      "refuting_evidence": [
+        "使用 USB-TTL（CH340/CP2102/FT232）且为 3.3V 或 5V 容忍电平"
+      ],
+      "source_ref": "本项目归纳（电平接口通用实践），非手册内容",
+      "applicable_chip": "不限",
+      "library": "不限",
+      "not_applicable_note": "MCU 引脚为 TTL 电平，直连 RS232 可能损坏引脚",
+      "verification_steps": [
+        "确认转换器为 TTL 电平（非 RS232）",
+        "确认目标板 IO 电平为 3.3V，必要时加电平转换"
+      ],
+      "static_analysis_only": true,
+      "linked_case": null
+    },
+    {
+      "rule_id": "R-S2-01",
+      "symptom": "S2",
+      "candidate_cause": "HSE_VALUE 宏定义与实际晶振频率不一致，导致波特率整体偏移",
+      "check_items": [
+        "analyze_c_code: 提取 HSE_VALUE 与 PLL 倍频配置",
+        "calc_baud_error: 按代码中推导的 PCLK 计算实际波特率与误差"
+      ],
+      "supporting_evidence": [
+        "板载晶振为 12MHz 而 HSE_VALUE 仍为 8000000（或反之）",
+        "calc_baud_error 输出误差显著偏大（如超过工具容差初值 2%）"
+      ],
+      "refuting_evidence": [
+        "HSE_VALUE 与板载晶振丝印一致，且 PLL 配置可推出预期 PCLK",
+        "calc_baud_error 计算误差在容差内"
+      ],
+      "source_ref": "RM0008 Ch.7 RCC（时钟树与 PLL）；HSE_VALUE 定义于 SPL 头文件",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "使用 HSI 或不做 PLL 倍频时，本条不适用；需改查 HSI 相关配置",
+      "verification_steps": [
+        "核对板载晶振丝印频率",
+        "修正 HSE_VALUE 与 PLL 倍频系数，使 SYSCLK 符合预期",
+        "用 calc_baud_error 复算误差",
+        "烧录后观察乱码是否消失"
+      ],
+      "linked_case": "C2"
+    },
+    {
+      "rule_id": "R-S2-02",
+      "symptom": "S2",
+      "candidate_cause": "波特率寄存器取值对应的实际波特率超出容差",
+      "check_items": [
+        "calc_baud_error: 输入 PCLK、目标波特率、BRR 取值（若用户提供）"
+      ],
+      "supporting_evidence": [
+        "目标波特率在当前 PCLK 下无法整除逼近，误差偏大",
+        "使用了非标准波特率（如 921600 且在低 PCLK 下）"
+      ],
+      "refuting_evidence": [
+        "误差在容差内（容差初值 2%，[待验证]，Phase 5 实测校准）",
+        "换用标准波特率后误差显著下降"
+      ],
+      "source_ref": "RM0008 Ch.19 USART（波特率发生器与分频寄存器）",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "不限",
+      "not_applicable_note": "本条阈值需实测校准；F1 仅支持 16 倍过采样，无 OVER8 配置位",
+      "verification_steps": [
+        "读取或复算 BRR 值对应的实际波特率",
+        "若误差超限，改用误差更小的标准波特率或调整 PCLK"
+      ],
+      "linked_case": "C2"
+    },
+    {
+      "rule_id": "R-S2-03",
+      "symptom": "S2",
+      "candidate_cause": "APB 分频设置与预期不符，USART 实际时钟源频率错误",
+      "check_items": [
+        "analyze_c_code: 提取 RCC_PCLK1Config / RCC_PCLK2Config 分频系数",
+        "calc_baud_error: 以实际 PCLK 复算波特率"
+      ],
+      "supporting_evidence": [
+        "代码中显式设置了非 1 分频，但波特率计算按 1 分频假设",
+        "USART1 位于 APB2 而代码按 APB1 的 PCLK1 计算（或反之）"
+      ],
+      "refuting_evidence": [
+        "分频系数与波特率计算所用 PCLK 一致"
+      ],
+      "source_ref": "RM0008 Ch.7 RCC（APB 预分频）；USART1 挂 APB2、USART2/3 挂 APB1",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "需先确认具体 USART 实例所在总线，USART1 与 USART2/3 的时钟源不同",
+      "verification_steps": [
+        "确认 USART 实例与总线归属（USART1→APB2/PCLK2；USART2、USART3→APB1/PCLK1）",
+        "按实际 PCLK 重算 BRR"
+      ],
+      "linked_case": "C2"
+    },
+    {
+      "rule_id": "R-S2-04",
+      "symptom": "S2",
+      "candidate_cause": "通信双方波特率/数据位/校验位/停止位参数不一致",
+      "check_items": [
+        "analyze_c_code: 提取 USART_Init 的字长、停止位、校验位、流控配置",
+        "check_uart_config: 与用户填写的串口助手参数比对"
+      ],
+      "supporting_evidence": [
+        "代码配置为 8N1 而串口助手设为 7E1 等不一致情况",
+        "启用了硬件流控但接线未提供 RTS/CTS"
+      ],
+      "refuting_evidence": [
+        "双方参数完全一致",
+        "改用最简单参数（8N1、无流控）后通信恢复"
+      ],
+      "source_ref": "RM0008 Ch.19 USART（帧格式配置）",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "本条需用户提供串口助手侧参数，仅凭代码无法判定",
+      "verification_steps": [
+        "统一双方为 8 位数据、无校验、1 位停止位、无流控",
+        "重测通信"
+      ],
+      "linked_case": null
+    },
+    {
+      "rule_id": "R-S3-01",
+      "symptom": "S3",
+      "candidate_cause": "TX/RX 引脚选错（未使用所用 USART 实例的默认或重映射引脚）",
+      "check_items": [
+        "analyze_c_code: 提取所用 USART 实例与配置的 GPIO 引脚",
+        "check_uart_config: 校验引脚与实例的映射关系"
+      ],
+      "supporting_evidence": [
+        "初始化 USART1 却配置了 PA2/PA3（USART2 默认引脚）",
+        "USART2 配置为 PA9/PA10"
+      ],
+      "refuting_evidence": [
+        "引脚与所用实例的映射关系一致"
+      ],
+      "source_ref": "RM0008 Ch.9 GPIO（复用功能映射表）/ 芯片数据手册引脚定义",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "引脚映射随封装与芯片型号变化，须对照所用封装的引脚定义表",
+      "verification_steps": [
+        "对照芯片数据手册确认所用 USART 的 TX/RX 引脚",
+        "修正 GPIO 端口与引脚号",
+        "必要时启用重映射并开 AFIO 时钟"
+      ],
+      "linked_case": "C3"
+    },
+    {
+      "rule_id": "R-S3-02",
+      "symptom": "S3",
+      "candidate_cause": "所选引脚被 JTAG/SWD 调试接口占用，未释放",
+      "check_items": [
+        "analyze_c_code: 检查是否使用 PA15/PB3/PB4 等调试引脚作为 GPIO",
+        "check_uart_config: 校验是否调用 GPIO_PinRemapConfig 释放 JTAG"
+      ],
+      "supporting_evidence": [
+        "将 PA15（JTDI）/PB3（JTDO）/PB4（NJTRST）用作普通 GPIO 而未释放 JTAG",
+        "烧录后引脚行为异常"
+      ],
+      "refuting_evidence": [
+        "未使用上述调试引脚",
+        "已调用 GPIO_Remap_SWJ_JTAGDisable 释放（保留 SWD 以便继续调试）"
+      ],
+      "source_ref": "RM0008 Ch.9 GPIO（调试端口复用与 AFIO）",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "完全关闭 SWJ 会导致无法再用 SWD 下载，须谨慎；建议仅禁用 JTAG 保留 SWD",
+      "verification_steps": [
+        "调用 GPIO_PinRemapConfig(GPIO_Remap_SWJ_JTAGDisable, ENABLE) 并开 AFIO 时钟",
+        "确认仍能通过 SWD 下载（说明仅释放 JTAG，未关闭调试）"
+      ],
+      "linked_case": null
+    },
+    {
+      "rule_id": "R-S4-01",
+      "symptom": "S4",
+      "candidate_cause": "RX 引脚未配置为输入模式",
+      "check_items": [
+        "analyze_c_code: 提取 RX 引脚的 GPIO_Mode",
+        "check_uart_config: RX 应为 IN_FLOATING 或 IPU"
+      ],
+      "supporting_evidence": [
+        "RX 引脚被配置为 AF_PP（输出）",
+        "RX 引脚配置为 Out_PP"
+      ],
+      "refuting_evidence": [
+        "RX 引脚为 IN_FLOATING 或 IPU"
+      ],
+      "source_ref": "RM0008 Ch.9 GPIO",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "HAL 表述不同；上拉输入在无外部上拉时更抗干扰",
+      "verification_steps": [
+        "将 RX 引脚改为 GPIO_Mode_IN_FLOATING 或 GPIO_Mode_IPU",
+        "保留 TX 为 AF_PP"
+      ],
+      "linked_case": "C5"
+    },
+    {
+      "rule_id": "R-S4-02",
+      "symptom": "S4",
+      "candidate_cause": "未使能接收（RE 位 / USART_IT_RXNE）",
+      "check_items": [
+        "analyze_c_code: 检查 USART_Init 中 USART_Mode 是否含 USART_Mode_Rx",
+        "check_uart_config: 若用中断接收，检查 USART_ITConfig(USART_IT_RXNE)"
+      ],
+      "supporting_evidence": [
+        "USART_Mode 只有 USART_Mode_Tx",
+        "使用中断接收但未使能 RXNE 中断"
+      ],
+      "refuting_evidence": [
+        "USART_Mode_Rx 与 USART_Mode_Tx 均已使能",
+        "[实测-硬件] 接收方向能收到数据"
+      ],
+      "source_ref": "RM0008 Ch.19 USART（接收使能与控制寄存器）",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "轮询接收方式下不需要 RXNE 中断使能，但需在主循环中查询 RXNE 标志",
+      "verification_steps": [
+        "在 USART_Init 中使能 USART_Mode_Rx",
+        "若用中断，同时调用 USART_ITConfig(USART1, USART_IT_RXNE, ENABLE)"
+      ],
+      "linked_case": "C5"
+    },
+    {
+      "rule_id": "R-S4-03",
+      "symptom": "S4",
+      "candidate_cause": "轮询接收时机错过导致丢字节",
+      "check_items": [
+        "analyze_c_code: 检查主循环中是否查询 USART_GetFlagStatus(USART_FLAG_RXNE)",
+        "analyze_c_code: 检查主循环是否含长延时阻塞"
+      ],
+      "supporting_evidence": [
+        "主循环中存在数百毫秒级延时，且采用轮询接收",
+        "[实测-硬件] 单次发送可接收，连续发送丢字节"
+      ],
+      "refuting_evidence": [
+        "采用中断接收且 ISR 中及时读取 DR",
+        "[实测-硬件] 连续发送无丢字节"
+      ],
+      "source_ref": "RM0008 Ch.19 USART（接收缓冲与标志）",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "单个字节的接收缓冲无 FIFO，主循环阻塞必然导致溢出",
+      "verification_steps": [
+        "改用中断接收 + 环形缓冲",
+        "或缩短主循环周期，确保轮询间隔小于字节间隔"
+      ],
+      "linked_case": null
+    },
+    {
+      "rule_id": "R-S5-01",
+      "symptom": "S5",
+      "candidate_cause": "未实现 printf 的底层输出重定向（fputc）",
+      "check_items": [
+        "analyze_c_code: 搜索 fputc / _write / __io_putchar 等重定向函数",
+        "check_uart_config: 若使用 printf 则校验重定向是否存在"
+      ],
+      "supporting_evidence": [
+        "代码中无任何 fputc 实现",
+        "[实测-硬件] 直接调用 USART_SendData 能正常发送，而 printf 无输出"
+      ],
+      "refuting_evidence": [
+        "实现了 fputc 且在函数内调用 USART_SendData 并等待发送完成标志",
+        "[实测-硬件] printf 输出正常"
+      ],
+      "source_ref": "编译器运行时库重定向机制（工具链相关），非 MCU 手册内容",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "不同编译器重定向入口不同（Keil/ARMCC 常用 fputc，GCC 常用 _write）",
+      "verification_steps": [
+        "实现 fputc，内部调用 USART_SendData 并等待 TXE 或 TC 标志",
+        "确认重定向函数所在文件已参与编译链接"
+      ],
+      "linked_case": "C6"
+    },
+    {
+      "rule_id": "R-S5-02",
+      "symptom": "S5",
+      "candidate_cause": "未启用 MicroLIB，半主机（semihosting）导致程序卡死或无输出",
+      "check_items": [
+        "parse_build_log: 检查链接日志是否含 semihosting 相关符号或警告",
+        "check_uart_config: 无法直接判定，需用户确认工程选项"
+      ],
+      "supporting_evidence": [
+        "[实测-硬件] 调用 printf 后程序停止运行（后续逻辑不再执行）",
+        "工程未勾选 Use MicroLIB 且未做 semihosting 禁用处理"
+      ],
+      "refuting_evidence": [
+        "已勾选 Use MicroLIB",
+        "已通过其他方式禁用半主机",
+        "[实测-硬件] printf 正常运行且程序继续执行"
+      ],
+      "source_ref": "工具链（Keil MDK）工程配置相关，非 MCU 手册内容",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "本条与编译工具链强相关；GCC/Makefile 工程需另行处理 syscalls",
+      "verification_steps": [
+        "在 Keil 工程 Target 选项中勾选 Use MicroLIB",
+        "或在代码中禁用半主机相关调用",
+        "重新编译并观察 printf 是否输出且程序继续运行"
+      ],
+      "linked_case": "C6"
+    },
+    {
+      "rule_id": "R-S6-01",
+      "symptom": "S6",
+      "candidate_cause": "未将 USART 中断挂接到 NVIC（未调用 NVIC_Init）",
+      "check_items": [
+        "analyze_c_code: 提取 NVIC_Init / NVIC_EnableIRQ 调用",
+        "check_uart_config: 校验 NVIC_IRQChannel 与所用 USART 实例一致"
+      ],
+      "supporting_evidence": [
+        "仅调用 USART_ITConfig 使能了 USART_IT_RXNE，但无 NVIC_Init",
+        "NVIC_IRQChannel 与实际使用的 USART 实例不匹配",
+        "NVIC_IRQChannelCmd 为 DISABLE"
+      ],
+      "refuting_evidence": [
+        "NVIC_Init 存在且 IRQChannel 正确、Cmd 为 ENABLE",
+        "[实测-硬件] 中断能被正常触发"
+      ],
+      "source_ref": "RM0008 Ch.9 中断与 NVIC 相关章节 / Cortex-M3 NVIC 编程模型",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "仅使能 USART 外设级中断不够，还必须在 NVIC 中打开对应 IRQ 通道",
+      "verification_steps": [
+        "补充 NVIC_InitTypeDef 配置：IRQChannel 为对应 USARTx_IRQn",
+        "设置抢占与响应优先级，Cmd 置 ENABLE",
+        "确认 NVIC_PriorityGroupConfig 与优先级取值匹配"
+      ],
+      "linked_case": "C5"
+    },
+    {
+      "rule_id": "R-S6-02",
+      "symptom": "S6",
+      "candidate_cause": "中断服务函数名与启动文件向量表不一致",
+      "check_items": [
+        "analyze_c_code: 提取中断服务函数名",
+        "parse_build_log: 检查是否有中断向量未定义相关警告"
+      ],
+      "supporting_evidence": [
+        "函数名拼写错误（如 USART1_IRQHandle 少 r）",
+        "自定义函数名与启动文件中定义的向量名不同"
+      ],
+      "refuting_evidence": [
+        "函数名与启动文件向量表条目完全一致",
+        "[实测-硬件] 中断可触发"
+      ],
+      "source_ref": "启动文件（startup_stm32f10x_xx.s）向量表定义；工具链相关",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "函数名与启动文件型号（如 md/hd）相关，需与实际芯片 Flash 密度对应",
+      "verification_steps": [
+        "对照启动文件确认向量名（如 USART1_IRQHandler）",
+        "修正函数名拼写",
+        "重新编译确认无未定义中断向量警告"
+      ],
+      "linked_case": "C5"
+    },
+    {
+      "rule_id": "R-S6-03",
+      "symptom": "S6",
+      "candidate_cause": "中断标志未清除，导致中断反复进入或只进一次",
+      "check_items": [
+        "analyze_c_code: 检查 ISR 内是否读取 USART_ReceiveData / 清标志",
+        "check_uart_config: 校验标志清除顺序是否符合该标志的清除方式"
+      ],
+      "supporting_evidence": [
+        "ISR 内未读取 DR 寄存器（RXNE 无法自动清除）",
+        "发送完成标志 TC 未按「先读 SR 再写 DR」的顺序清除"
+      ],
+      "refuting_evidence": [
+        "ISR 内正确读取了 DR，标志被清除",
+        "[实测-硬件] 中断触发频率与数据量一致"
+      ],
+      "source_ref": "RM0008 Ch.19 USART（状态寄存器与标志清除方式）",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "不同标志清除方式不同，RXNE 靠读 DR 清除，TC 需读 SR 后写 DR",
+      "verification_steps": [
+        "在 ISR 中调用 USART_ReceiveData 读取接收到的字节（同时清除 RXNE）",
+        "若处理 TC，按「读 SR 再写 DR」顺序清除"
+      ],
+      "linked_case": "C5"
+    },
+    {
+      "rule_id": "R-S6-04",
+      "symptom": "S6",
+      "candidate_cause": "接收溢出错误（ORE）未处理，导致后续接收停止",
+      "check_items": [
+        "analyze_c_code: 检查 ISR 是否查询并处理 USART_FLAG_ORE",
+        "check_uart_config: 若仅处理 RXNE 则提示 ORE 风险"
+      ],
+      "supporting_evidence": [
+        "[实测-硬件] 接收一段时间后完全停止，且此前有丢字节现象",
+        "ISR 中未查询 ORE 标志"
+      ],
+      "refuting_evidence": [
+        "ISR 中处理了 ORE（按「读 SR 再读 DR」顺序清除）",
+        "[实测-硬件] 长时间连续接收稳定"
+      ],
+      "source_ref": "RM0008 Ch.19 USART（过载错误标志）",
+      "applicable_chip": "STM32F103C8T6",
+      "library": "SPL",
+      "not_applicable_note": "ORE 清除顺序与 RXNE 不同，不能用同一段代码处理",
+      "verification_steps": [
+        "在 ISR 中查询 USART_FLAG_ORE",
+        "按「先读 SR 再读 DR」的顺序清除 ORE"
+      ],
+      "linked_case": null
+    },
+    {
+      "rule_id": "R-X-01",
+      "symptom": "任意",
+      "candidate_cause": "问题实际来自编译/链接错误，而非硬件或配置",
+      "check_items": [
+        "parse_build_log: 优先解析用户提交的编译日志"
+      ],
+      "supporting_evidence": [
+        "编译日志中存在 Error 级条目（未定义符号、语法错误等）",
+        "链接阶段报错导致固件未正确生成"
+      ],
+      "refuting_evidence": [
+        "编译日志仅有 Warning 或无错误，且固件已成功烧录"
+      ],
+      "source_ref": "工具链输出，非 MCU 手册内容",
+      "applicable_chip": "不限",
+      "library": "不限",
+      "not_applicable_note": "本条优先级最高：存在编译错误时，硬件侧结论不可信",
+      "verification_steps": [
+        "修复编译日志中的 Error",
+        "确认生成可执行文件并烧录后，再重新评估串口现象"
+      ],
+      "priority": "highest",
+      "linked_case": null
+    },
+    {
+      "rule_id": "R-X-02",
+      "symptom": "任意",
+      "candidate_cause": "提交材料不足以定位（缺代码、缺现象描述、超范围外设）",
+      "check_items": [
+        "check_uart_config: 判定可用材料是否覆盖最小必需项",
+        "search_reference: 仅在材料充分时检索"
+      ],
+      "supporting_evidence": [
+        "未提供源码或关键初始化片段",
+        "现象描述仅有一句「串口不通」，无波特率/接线/是否部分可用等信息",
+        "提交的是 I2C/SPI 等其他外设代码"
+      ],
+      "refuting_evidence": [
+        "材料包含源码 + 现象 + 芯片型号，且属于 UART 范围"
+      ],
+      "source_ref": "本项目诊断流程约束（AI 安全与可控要求）",
+      "applicable_chip": "不限",
+      "library": "不限",
+      "not_applicable_note": "必须输出「材料不足」或「超范围」，禁止给出唯一根因结论",
+      "verification_steps": [
+        "列出缺失材料清单并要求用户补充",
+        "若为超范围外设，明确说明当前仅支持 USART 并给出边界"
+      ],
+      "priority": "highest",
+      "linked_case": null
+    }
+  ]
+}

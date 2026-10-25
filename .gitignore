@@ -1,0 +1,35 @@
+# ---- 依赖 ----
+node_modules/
+__pycache__/
+*.py[cod]
+
+# ---- 构建产物 ----
+dist/
+build/
+*.tsbuildinfo
+
+# ---- 本地数据 ----
+apps/server/data/
+*.db
+*.db-wal
+*.db-shm
+
+# ---- 敏感信息（红线：密钥绝不入库）----
+.env
+.env.local
+*.key
+
+# ---- 内部工作区（记忆、核对脚本运行产物，不入公开仓库）----
+.workbuddy/
+
+# ---- 赛事原始文件（组织方资料，不随公开仓库提交）----
+比赛.docx
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- 日志 ----
+*.log

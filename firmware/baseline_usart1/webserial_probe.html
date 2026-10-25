@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>芯诊 AI · Phase 2.5 串口验证页（Web Serial）</title>
+<style>
+    :root {
+        --bg: #f7f8fa;
+        --panel: #ffffff;
+        --border: #d8dce3;
+        --text: #1f2329;
+        --muted: #646a73;
+        --accent: #2b5cff;
+        --ok: #1a7f37;
+        --warn: #bc4c00;
+        --err: #c9252d;
+        --mono: "Cascadia Mono", "Consolas", "Menlo", monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0; padding: 24px;
+        background: var(--bg); color: var(--text);
+        font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        line-height: 1.6;
+    }
+    .wrap { max-width: 980px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+    .panel {
+        background: var(--panel); border: 1px solid var(--border);
+        border-radius: 8px; padding: 16px; margin-bottom: 16px;
+    }
+    .panel h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); font-weight: 600; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    label { font-size: 13px; color: var(--muted); }
+    select, input {
+        padding: 6px 10px; border: 1px solid var(--border);
+        border-radius: 6px; font-size: 13px; background: #fff; color: var(--text);
+    }
+    button {
+        padding: 8px 16px; border: 1px solid var(--border); border-radius: 6px;
+        background: #fff; color: var(--text); font-size: 13px; cursor: pointer;
+    }
+    button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    button.primary:hover:not(:disabled) { background: #1e4bd8; color: #fff; }
+    #output {
+        background: #1e1f22; color: #d4d4d4;
+        font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+        padding: 12px; border-radius: 6px; height: 320px;
+        overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+    }
+    .stats { display: flex; gap: 20px; flex-wrap: wrap; font-size: 13px; margin-top: 12px; }
+    .stat { padding: 8px 12px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); }
+    .stat b { font-size: 15px; }
+    .verdict { margin-top: 12px; padding: 10px 12px; border-radius: 6px; font-size: 13px; }
+    .verdict.ok { background: #eaf6ec; color: var(--ok); border: 1px solid #b7e0c0; }
+    .verdict.warn { background: #fff6e6; color: var(--warn); border: 1px solid #ffd8a8; }
+    .verdict.err { background: #fdecec; color: var(--err); border: 1px solid #f5b5b5; }
+    .verdict.idle { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+    .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+    .err-box { display: none; background: #fdecec; color: var(--err); border: 1px solid #f5b5b5;
+               padding: 12px; border-radius: 6px; font-size: 13px; margin-bottom: 16px; }
+    code { font-family: var(--mono); background: var(--bg); padding: 1px 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+    <h1>芯诊 AI · Phase 2.5 串口验证页</h1>
+    <div class="sub">
+        基准工程专用：Web Serial API 直读串口，并自动判别乱码与丢行。
+        全部处理在浏览器本地完成，数据不上传任何服务器。
+    </div>
+
+    <div id="errBox" class="err-box"></div>
+
+    <div class="panel">
+        <h2>连接</h2>
+        <div class="row">
+            <label>波特率
+                <select id="baud">
+                    <option value="115200" selected>115200（基准工程）</option>
+                    <option value="9600">9600</option>
+                    <option value="19200">19200</option>
+                    <option value="38400">38400</option>
+                    <option value="57600">57600</option>
+                    <option value="230400">230400</option>
+                    <option value="460800">460800</option>
+                    <option value="921600">921600</option>
+                </select>
+            </label>
+            <label>数据位
+                <select id="dataBits"><option value="8" selected>8</option><option value="7">7</option></select>
+            </label>
+            <label>停止位
+                <select id="stopBits"><option value="1" selected>1</option><option value="2">2</option></select>
+            </label>
+            <label>校验
+                <select id="parity">
+                    <option value="none" selected>无</option>
+                    <option value="even">偶</option><option value="odd">奇</option>
+                </select>
+            </label>
+            <label>流控
+                <select id="flow"><option value="none" selected>无</option><option value="hardware">硬件</option></select>
+            </label>
+            <button id="btnConnect" class="primary">连接串口</button>
+            <button id="btnStop" disabled>停止</button>
+        </div>
+        <div class="hint">
+            点击后由浏览器弹出设备选择列表（这是浏览器的安全要求，必须由点击触发）。
+            默认参数即基准工程所用：<code>115200 / 8 / 无校验 / 1 停止位 / 无流控</code>。
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>接收</h2>
+        <div id="output"></div>
+        <div class="stats">
+            <div class="stat">字节 <b id="sBytes">0</b></div>
+            <div class="stat">行数 <b id="sLines">0</b></div>
+            <div class="stat">非 ASCII 占比 <b id="sNonAscii">0%</b></div>
+            <div class="stat">tick 计数 <b id="sTick">—</b></div>
+            <div class="stat">丢行 <b id="sGap">0</b></div>
+        </div>
+        <div id="verdict" class="verdict idle">尚未开始接收</div>
+        <div class="row" style="margin-top:12px">
+            <button id="btnClear">清空</button>
+            <button id="btnCopy">复制全部</button>
+            <button id="btnSave">保存为 txt</button>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>说明</h2>
+        <div style="font-size:13px;color:var(--muted)">
+            <p style="margin:0 0 6px">
+                <b>自动判别逻辑</b>：解析基准工程输出中的 <code>tick N</code>，
+                若相邻 N 不连续则计为丢行；非 ASCII 字符占比偏高提示乱码（波特率/时钟问题）。
+            </p>
+            <p style="margin:0 0 6px">
+                <b>浏览器要求</b>：Chrome 或 Edge。Firefox 不支持 Web Serial API。
+            </p>
+            <p style="margin:0">
+                <b>独占访问</b>：串口被本页打开期间，其他串口工具无法同时访问，请先关闭它们。
+            </p>
+        </div>
+    </div>
+
+</div>
+
+<script>
+(function () {
+    "use strict";
+
+    var el = function (id) { return document.getElementById(id); };
+    var output = el("output");
+    var errBox = el("errBox");
+
+    var port = null;
+    var reader = null;
+    var keepReading = false;
+
+    var totalBytes = 0;
+    var totalLines = 0;
+    var nonAscii = 0;
+    var lastTick = null;
+    var gapCount = 0;
+    var rawLines = [];
+    var decoder = new TextDecoder("utf-8");
+
+    function showError(msg) {
+        errBox.textContent = msg;
+        errBox.style.display = "block";
+    }
+
+    function appendText(text) {
+        output.textContent += text;
+        output.scrollTop = output.scrollHeight;
+    }
+
+    function resetStats() {
+        totalBytes = 0; totalLines = 0; nonAscii = 0;
+        lastTick = null; gapCount = 0; rawLines = [];
+        updateStats();
+    }
+
+    function updateStats() {
+        el("sBytes").textContent = totalBytes;
+        el("sLines").textContent = totalLines;
+        el("sNonAscii").textContent = totalBytes === 0 ? "0%"
+            : (nonAscii / totalBytes * 100).toFixed(1) + "%";
+        el("sTick").textContent = lastTick === null ? "—" : lastTick;
+        el("sGap").textContent = gapCount;
+    }
+
+    function setVerdict(kind, text) {
+        var v = el("verdict");
+        v.className = "verdict " + kind;
+        v.textContent = text;
+    }
+
+    /* 针对基准工程的输出做判别 */
+    function analyzeLine(line) {
+        var m = line.match(/tick\s+(\d+)/);
+        if (m) {
+            var n = parseInt(m[1], 10);
+            if (lastTick !== null && n !== lastTick + 1) {
+                gapCount++;
+            }
+            lastTick = n;
+        }
+        updateStats();
+        evaluate();
+    }
+
+    function evaluate() {
+        if (totalBytes === 0) {
+            setVerdict("idle", "尚未收到数据 —— 检查接线（TX/RX 交叉、共地）与波特率");
+            return;
+        }
+        var ratio = nonAscii / totalBytes;
+        var msgs = [];
+        var level = "ok";
+
+        if (ratio > 0.15) {
+            level = "err";
+            msgs.push("非 ASCII 占比 " + (ratio * 100).toFixed(1) + "%，倾向于乱码");
+        } else if (ratio > 0.02) {
+            level = "warn";
+            msgs.push("存在少量非 ASCII 字符（" + (ratio * 100).toFixed(1) + "%），需人工核对");
+        }
+
+        if (gapCount > 0) {
+            if (level === "ok") { level = "warn"; }
+            msgs.push("检测到 " + gapCount + " 处 tick 计数不连续（丢行）");
+        }
+
+        if (lastTick !== null && ratio <= 0.02 && gapCount === 0) {
+            msgs.push("tick 计数连续且无乱码 —— 链路正常");
+        }
+
+        setVerdict(level, msgs.length ? msgs.join("；") : "已收到数据，请人工核对内容");
+    }
+
+    function handleChunk(bytes) {
+        totalBytes += bytes.length;
+        for (var i = 0; i < bytes.length; i++) {
+            var b = bytes[i];
+            if (b > 0x7e || (b < 0x20 && b !== 0x0d && b !== 0x0a && b !== 0x09)) {
+                nonAscii++;
+            }
+        }
+        var text = decoder.decode(bytes, { stream: true });
+        appendText(text);
+        rawLines.push(text);
+
+        /* 按行做分析 */
+        var buf = output.textContent;
+        var lines = buf.split("\n");
+        var newCount = lines.length - 1;
+        if (newCount > totalLines) {
+            for (var k = totalLines; k < newCount; k++) {
+                analyzeLine(lines[k]);
+            }
+            totalLines = newCount;
+        }
+        updateStats();
+    }
+
+    async function connect() {
+        errBox.style.display = "none";
+
+        if (!navigator.serial) {
+            showError("当前浏览器不支持 Web Serial API。请使用 Chrome 或 Edge 打开本页面。");
+            return;
+        }
+        if (!window.isSecureContext) {
+            showError("当前不是安全上下文（secure context），Web Serial 不可用。请通过 https:// 或 http://localhost 打开本页面（直接双击 file:// 打开通常不行）。");
+            return;
+        }
+
+        try {
+            port = await navigator.serial.requestPort();
+        } catch (e) {
+            showError("未选择设备或请求被取消：" + e.message);
+            return;
+        }
+
+        var opts = {
+            baudRate: parseInt(el("baud").value, 10),
+            dataBits: parseInt(el("dataBits").value, 10),
+            stopBits: parseInt(el("stopBits").value, 10),
+            parity: el("parity").value,
+            flowControl: el("flow").value,
+            bufferSize: 4096
+        };
+
+        try {
+            await port.open(opts);
+        } catch (e) {
+            showError("打开串口失败：" + e.message + "。若串口被其他程序占用，请先关闭它们。");
+            port = null;
+            return;
+        }
+
+        var info = port.getInfo();
+        appendText("[已连接] usbVendorId=0x" +
+            (info.usbVendorId ? info.usbVendorId.toString(16) : "?") +
+            " usbProductId=0x" +
+            (info.usbProductId ? info.usbProductId.toString(16) : "?") +
+            " @ " + opts.baudRate + " " + opts.dataBits + "-" +
+            opts.parity + "-" + opts.stopBits + "\n");
+
+        el("btnConnect").disabled = true;
+        el("btnStop").disabled = false;
+        resetStats();
+        setVerdict("idle", "已连接，等待数据…");
+
+        keepReading = true;
+        reader = port.readable.getReader();
+        try {
+            while (keepReading) {
+                var result = await reader.read();
+                if (result.done) { break; }
+                handleChunk(result.value);
+            }
+        } catch (e) {
+            showError("读取中断：" + e.message);
+        } finally {
+            try { reader.releaseLock(); } catch (e) {}
+            reader = null;
+        }
+    }
+
+    async function stop() {
+        keepReading = false;
+        if (reader) {
+            try { await reader.cancel(); } catch (e) {}
+        }
+        if (port) {
+            try { await port.close(); } catch (e) {}
+            port = null;
+        }
+        el("btnConnect").disabled = false;
+        el("btnStop").disabled = true;
+        appendText("\n[已停止]\n");
+        evaluate();
+    }
+
+    el("btnConnect").addEventListener("click", connect);
+    el("btnStop").addEventListener("click", stop);
+    el("btnClear").addEventListener("click", function () {
+        output.textContent = "";
+        decoder = new TextDecoder("utf-8");
+        resetStats();
+        setVerdict("idle", "已清空，等待数据");
+    });
+    el("btnCopy").addEventListener("click", function () {
+        navigator.clipboard.writeText(output.textContent).then(function () {
+            alert("已复制");
+        });
+    });
+    el("btnSave").addEventListener("click", function () {
+        var blob = new Blob([output.textContent], { type: "text/plain;charset=utf-8" });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "phase2_5_serial_capture.txt";
+        a.click();
+        URL.revokeObjectURL(a.href);
+    });
+
+    /* 启动自检 */
+    if (!navigator.serial) {
+        showError("当前浏览器不支持 Web Serial API（navigator.serial 不存在）。请使用 Chrome 或 Edge。");
+    } else if (!window.isSecureContext) {
+        showError("非安全上下文：Web Serial 可能不可用。建议通过 http://localhost 打开本页面，而不是直接双击 file:// 。");
+    }
+})();
+</script>
+</body>
+</html>

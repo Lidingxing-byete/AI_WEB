@@ -1,0 +1,5 @@
+# 后端依赖白名单（AGENTS.md 批次② 批准范围，不得超出）
+# 解释器固定：C:/Users/Zero/.workbuddy/binaries/python/envs/default/Scripts/python.exe (3.13.14)
+fastapi>=0.162.0
+uvicorn[standard]>=0.54.0
+pydantic>=2.14.0

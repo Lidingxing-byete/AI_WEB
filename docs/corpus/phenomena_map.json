@@ -1,0 +1,82 @@
+{
+  "version": "0.1",
+  "generated_at": "2026-10-25",
+  "author": "本项目自撰",
+  "purpose": "故障案例 → 预期串口现象的对照表，用于把用户在硬件上抓到的实测现象与候选根因做一致性比对。",
+  "global_evidence_tag": "[推断]",
+  "caveat": "本表所有 expected_* 均为**尚未实测的推断**，依据为 Phase 2 案例集设计 + 公有技术事实推理。在 Phase 5 完成真实硬件验证前，任何由本表得出的比对结论一律标 [推断]，不得标 [实测-硬件]。",
+  "verdict_enum": {
+    "EMPTY": "串口助手收到 0 字节有效数据",
+    "GARBLED": "收到数据但不可读（非预期字符 / 乱码）",
+    "NORMAL": "收到可读且内容符合预期的文本",
+    "NO_RESPONSE": "PC 已发送但 MCU 无任何回送（用于接收方向）"
+  },
+  "items": [
+    {
+      "case_id": "C1",
+      "rule_id": "R-S1-01",
+      "cause": "USART1 外设时钟未使能",
+      "expected_tx": "EMPTY",
+      "expected_rx": "NO_RESPONSE",
+      "expected_led": "BLINK",
+      "basis": "USART1 挂载 APB2，未开时钟时其寄存器读写不生效，波特率发生器不工作，TX 无波形；但 CPU 与 GPIO 时钟正常，主循环仍在跑，故 LED 继续闪烁。",
+      "discriminator": "LED 仍闪烁 → 程序在运行，故障限定在外设配置而非程序未启动",
+      "evidence_tag": "[推断]"
+    },
+    {
+      "case_id": "C2",
+      "rule_id": "R-S2-01",
+      "cause": "波特率所依据时钟与实际不符（代码按 12MHz 计算，实际晶振 8MHz）",
+      "expected_tx": "GARBLED",
+      "expected_rx": "GARBLED",
+      "expected_led": "BLINK",
+      "basis": "BRR 按 12MHz 算出，实际总线时钟为 8MHz 时，真实波特率 = 期望波特率 × 8/12 ≈ 0.667 倍，收发双方位时间不匹配，采样点偏移，故收到乱码。",
+      "discriminator": "**有输出但乱码** → 区别于 C1/C3/C6 的完全无输出",
+      "evidence_tag": "[推断]"
+    },
+    {
+      "case_id": "C3",
+      "rule_id": "R-S3-01",
+      "cause": "TX 引脚未配置为复用推挽（AF_PP）",
+      "expected_tx": "EMPTY",
+      "expected_rx": "NO_RESPONSE",
+      "expected_led": "BLINK",
+      "basis": "PA9 若配置为普通 GPIO 输出或未开启复用功能，USART1 的 TX 信号不会驱动到引脚，示波器上无起始位下降沿。",
+      "discriminator": "与 C1 现象相同（都无输出），需靠**代码检查**区分：C1 看 RCC，C3 看 GPIO_Mode",
+      "evidence_tag": "[推断]"
+    },
+    {
+      "case_id": "C4",
+      "rule_id": "R-S1-02",
+      "cause": "使用 USART1 重映射但未开启 AFIO 时钟",
+      "expected_tx": "EMPTY",
+      "expected_rx": "NO_RESPONSE",
+      "expected_led": "BLINK",
+      "basis": "重映射由 AFIO_MAPR 控制，AFIO 挂 APB2；未开 AFIO 时钟时写 MAPR 无效，USART1 仍在默认引脚 PA9/PA10 输出，用户若接在 PB6/PB7 上则收不到任何数据。",
+      "discriminator": "**现象依赖接线**：改接 PA9 若立即恢复正常，即可反证为映射未生效而非波特率问题",
+      "evidence_tag": "[推断]"
+    },
+    {
+      "case_id": "C5",
+      "rule_id": "R-S4-01",
+      "cause": "接收中断未挂接 NVIC（未配 NVIC 或未使能 USART_IT_RXNE）",
+      "expected_tx": "NORMAL",
+      "expected_rx": "NO_RESPONSE",
+      "expected_led": "BLINK",
+      "basis": "发送为查询方式、与中断无关，故 MCU→PC 方向正常；接收依赖中断，NVIC 未挂接时 RXNE 不触发 ISR，PC→MCU 数据被丢弃，无回送。",
+      "discriminator": "**单向正常**是该故障的强特征：能收数据但发不回去",
+      "evidence_tag": "[推断]"
+    },
+    {
+      "case_id": "C6",
+      "rule_id": "R-S5-01",
+      "cause": "printf 未重定向到串口（缺 fputc）",
+      "expected_tx": "EMPTY",
+      "expected_rx": "NO_RESPONSE",
+      "expected_led": "BLINK",
+      "basis": "未实现 fputc 时 printf 的输出不进入 USART 发送寄存器，串口无数据；但直接调用 USART_SendData 仍能正常发送。",
+      "discriminator": "用 USART_SendData 直发一个字节**能通**，即证明硬件链路与波特率无误，故障在输出层而非配置层",
+      "evidence_tag": "[推断]"
+    }
+  ]
+}
