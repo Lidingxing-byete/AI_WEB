@@ -49,7 +49,7 @@ em { font-style: italic; }
   <div class="tag">可追溯 · 不硬猜 · 可重复 · 证据纪律</div>
 </div>
 <h1>芯诊 AI · 技术文档</h1>
-<blockquote>版本：2026-10-25（Phase 0–7 全部软件侧交付后整理）<br>适用读者：评委、开发者、使用者<br>本文档所有结论遵守项目证据纪律：系统内无任何 <code>[实测-硬件]</code> 结论（硬件实测 0/6，待用户上板回填）。<br>固定评测集仅 9 用例，所有评测数字均为<strong>趋势口径</strong>，不宣称任何准确率。</blockquote>
+<blockquote>版本：2026-10-25（Phase 0–7 全部软件侧交付后整理）<br>适用读者：评委、开发者、使用者<br>本文档所有结论遵守项目证据纪律：系统内无任何 <code>[实测-硬件]</code> 结论——按 2026-10-25 范围决策，真实硬件实测不纳入本期交付；结论以 <code>[静态分析]</code> / <code>[实测-仿真]</code> / <code>[推断]</code> 分级，硬件实测回填通道（T-07）保留为后续扩展。<br>固定评测集仅 9 用例，所有评测数字均为<strong>趋势口径</strong>，不宣称任何准确率。</blockquote>
 <p>---</p>
 <h2>1. 产品概述</h2>
 <p><strong>芯诊 AI</strong> 是一个<strong>证据驱动的 STM32 USART 故障诊断 Web 工作台</strong>： 用户粘贴代码 / 编译日志 / 串口抓帧，系统用确定性工具提取证据、检索自建知识库、 按规则推理出<strong>带证据链的候选根因</strong>，并给出<strong>可在真机上执行的验证步骤</strong>； 用户回填实测结果后，系统重排结论并出具<strong>七章结构化诊断报告</strong>。</p>
@@ -154,7 +154,7 @@ cd apps/server &amp;&amp; python run_all_tests.py</code></pre>
 <h2>11. 总结与展望</h2>
 <p><strong>总结</strong>：本项目用"确定性工具查证 + 规则推理 + 本地模型解释"的组合， 把 STM32 USART 故障诊断从"猜答案"变成"查证据"，形成可追溯、不硬猜、可重复的闭环； 软件侧 8 套件全绿、9 用例评测达标、安全合规通过、默认模型经三模型基线选定。</p>
 <p><strong>展望</strong>：</p>
-<ul><li><strong>硬件实测回填</strong>（提交前重点）：C1–C6 上板抓帧回填，产生系统首批 <code>[实测-硬件]</code> 证据并校准阈值；</li><li><strong>协议扩展</strong>：USART2/3、SPI、I2C、CAN 的规则库与工具逐步扩展（MVP 边界内保持不硬套）；</li><li><strong>多模态</strong>：串口抓帧波形图、示波器截图识别（当前 P1-D 决策未投入，作为后续方向）；</li><li><strong>云端可选</strong>：降级链第①级接入云端大模型用于更复杂场景（配置位已留）；</li><li><strong>在线演示</strong>：部署公网版本供评审访问（可选加分项）。</li></ul>
+<ul><li><strong>硬件实测回填</strong>（后续扩展）：T-07 抓帧回填通道与上板方案（C1–C6）已就绪并保留，可产生系统首批 <code>[实测-硬件]</code> 证据并校准阈值；本期按范围决策不执行；</li><li><strong>协议扩展</strong>：USART2/3、SPI、I2C、CAN 的规则库与工具逐步扩展（MVP 边界内保持不硬套）；</li><li><strong>多模态</strong>：串口抓帧波形图、示波器截图识别（当前 P1-D 决策未投入，作为后续方向）；</li><li><strong>云端可选</strong>：降级链第①级接入云端大模型用于更复杂场景（配置位已留）；</li><li><strong>在线演示</strong>：部署公网版本供评审访问（可选加分项）。</li></ul>
 <h2>12. 目录速查</h2>
 <pre><code>apps/server/app/engine/     8 工具 + orchestrator
 apps/server/app/corpus/     规则/卡片加载 + BM25
