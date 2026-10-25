@@ -256,7 +256,15 @@ export const useStore = create<State>((set, get) => ({
             })),
           })
         }
-        if (type === 'closed' || type === 'done') {
+        // 时序要点：引擎的 done 事件在 _persist_report 落库**之前**发出
+        // （后端 worker：run → 发 done → 落库 → closed）。若收到 done 就
+        // 拉全量，会与落库竞态，偶发拉到空数据（界面显示"漏检/工具0/0"
+        // 而 DB 实际完整）。因此 done 只结束流式阶段；落库完成由
+        // closed 事件确认后再 refresh。
+        if (type === 'done') {
+          set({ streaming: false })
+        }
+        if (type === 'closed') {
           finish()
         }
         if (type === 'error') {

@@ -14,8 +14,6 @@ export function RightPanel() {
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-3">
       <ExpectationCard />
-      <FollowupCard />
-      <VerificationPlanCard />
 
       {hypotheses.length === 0 && !streaming && (
         <Card title="候选根因">
@@ -25,9 +23,14 @@ export function RightPanel() {
         </Card>
       )}
 
+      {/* 候选根因是诊断核心输出，紧跟预期对照置顶展示；
+          支持证据、验证步骤与回填表单都在卡片内，无需滚动即可到达 */}
       {hypotheses.map((h) => (
         <HypothesisCard key={h.rule_id + h.rank} h={h} onSubmit={submitResult} />
       ))}
+
+      <FollowupCard />
+      <VerificationPlanCard />
     </div>
   )
 }
