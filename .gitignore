@@ -67,3 +67,4 @@ deliverables/*.mp4
 deploy/xz-web-dist.zip
 deploy/xinzhen-src.tar.gz
 /docs/博客*.md
+deploy/*.tar.gz

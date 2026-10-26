@@ -34,9 +34,16 @@ for cand in python3.12 python3.11 python3.10 python3.9; do
   if command -v "$cand" >/dev/null 2>&1; then PY="$cand"; break; fi
 done
 if [ -z "$PY" ]; then
-  say "未找到 3.9+，用 dnf 安装 python3.9"
-  dnf install -y python3.9 || die "python3.9 安装失败，请手动安装后重跑"
-  PY=python3.9
+  # Alinux3 仓库里 python3.11 可用；3.9 不一定有，所以先试 3.11
+  if dnf list --available python3.11 >/dev/null 2>&1; then
+    say "未找到 3.9+，安装 python3.11（Alinux3 官方源）"
+    dnf install -y python3.11 python3.11-pip >/dev/null || die "python3.11 安装失败"
+    PY=python3.11
+  else
+    say "未找到 3.9+，尝试安装 python3.9"
+    dnf install -y python3.9 >/dev/null || die "python3.9 安装失败，请手动安装后重跑"
+    PY=python3.9
+  fi
 fi
 "$PY" -c 'import sys; assert sys.version_info >= (3,9), sys.version' \
   || die "$PY 版本过低"
@@ -60,7 +67,7 @@ fi
 
 # ---------------------------------------------------------------- 3. venv
 say "3/7 创建虚拟环境并安装依赖（只有 fastapi / uvicorn / pydantic）"
-[ -d "$APP_DIR/venv" ] || "$PY" -m venv "$APP_DIR/venv" || die "venv 创建失败（缺 python3-venv？）"
+[ -d "$APP_DIR/venv" ] || "$PY" -m venv "$APP_DIR/venv" || die "venv 创建失败：确认已装 $PY-pip（dnf install -y ${PY}-pip）"
 "$APP_DIR/venv/bin/pip" install --upgrade pip -q
 "$APP_DIR/venv/bin/pip" install -q -r "$APP_DIR/apps/server/requirements.txt" || die "依赖安装失败"
 
