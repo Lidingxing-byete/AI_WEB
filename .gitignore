@@ -61,3 +61,6 @@ deliverables/技术文档.html
 
 # 演示视频（体积大，按赛事要求单独作为附件提交，不进代码仓库）
 deliverables/*.mp4
+
+# 前端构建产物（上传服务器用，入库无意义）
+deploy/xz-web-dist.zip
