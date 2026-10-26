@@ -16,10 +16,11 @@ export const API = `${BASE}/api`
  * 只在此处构造、只随请求发出：不写 localStorage（只放 sessionStorage）、
  * 不进 URL（URL 会进服务端访问日志，等于把密钥写进日志）、不进界面文本。
  */
-function keyHeaders(cloudKey: string, model = ''): Record<string, string> {
+function keyHeaders(cloudKey: string, model = '', provider = ''): Record<string, string> {
   const h: Record<string, string> = {}
   if (cloudKey.trim()) h['X-Cloud-Key'] = cloudKey.trim()
   if (model.trim()) h['X-Cloud-Model'] = model.trim()
+  if (provider.trim()) h['X-Cloud-Provider'] = provider.trim()
   return h
 }
 
@@ -87,10 +88,22 @@ export interface PhenomMatch {
   discriminator: string
 }
 
+/** 服务商目录条目（服务端白名单，前端只读）。 */
+export interface CloudProviderInfo {
+  id: string
+  label: string
+  base_url: string
+  default_model: string
+  models: string[]
+  note: string
+}
+
 /** 密钥校验结果。**永远只有掩码**，明文只在请求头里传一次。 */
 export interface VerifyKeyResult {
   ok: boolean
   masked: string
+  provider: string
+  provider_label: string
   model: string
   reason: string
   /** 固定为 none：服务端不保存任何密钥 */
@@ -122,6 +135,7 @@ export interface LlmStatus {
   preferred: string
   active_hint: string
   cloud_provider: string
+  cloud_provider_label?: string
   cloud: CloudStatus
   note: string
 }
@@ -300,17 +314,21 @@ export const api = {
    * 传 `cloudKey` 时后端按**你的密钥**探测云端（不保存、只用这一次），
    * 用于面板显示"我的密钥是否可用"。
    */
-  getLlmStatus: (cloudKey = '', model = '') =>
-    req<LlmStatus>('/llm/status', { headers: keyHeaders(cloudKey, model) }),
+  getLlmStatus: (cloudKey = '', model = '', provider = '') =>
+    req<LlmStatus>('/llm/status', { headers: keyHeaders(cloudKey, model, provider) }),
+
+  /** 可选云端服务商（白名单）。新增服务商只改后端预设表，前端下拉自动出现。 */
+  getCloudProviders: () =>
+    req<{ items: CloudProviderInfo[]; default: string }>('/llm/providers'),
 
   /**
    * 校验测试者自己的云端密钥：服务端只做一次 `GET /models` 鉴权探测
    * （不触发计费推理、不落盘），返回 ok 与掩码。
    */
-  verifyCloudKey: (apiKey: string, model = '') =>
+  verifyCloudKey: (apiKey: string, provider = 'deepseek', model = '') =>
     req<VerifyKeyResult>('/llm/verify-key', {
       method: 'POST',
-      body: JSON.stringify({ api_key: apiKey, model }),
+      body: JSON.stringify({ api_key: apiKey, provider, model }),
     }),
 
   /** 本任务的模型调用记录（元数据，不含提示词原文）。 */
@@ -361,7 +379,7 @@ export const api = {
    * 走的是与 SSE 完全相同的引擎路径，不存在两套诊断逻辑。
    */
   reassess: (id: string, useLlm = false, provider = 'auto',
-             cloudKey = '', model = '') =>
+             cloudKey = '', model = '', cloudProvider = '') =>
     req<{
       status: string
       hypotheses: any[]
@@ -371,7 +389,7 @@ export const api = {
       llm_narrative: LlmNarrative | null
     }>(
       `/tasks/${id}/reassess?use_llm=${useLlm ? 1 : 0}&provider=${encodeURIComponent(provider)}`,
-      { method: 'POST', headers: keyHeaders(cloudKey, model) },
+      { method: 'POST', headers: keyHeaders(cloudKey, model, cloudProvider) },
     ),
 
   getHypotheses: (id: string) => req<{ items: Hypothesis[] }>(`/tasks/${id}/hypotheses`),
@@ -420,6 +438,7 @@ export function openDiagnoseStream(
   provider = 'auto',
   cloudKey = '',
   cloudModel = '',
+  cloudProvider = '',
 ): () => void {
   const ctrl = new AbortController()
   const url = `${API}/tasks/${taskId}/diagnose?use_llm=${useLlm ? 1 : 0}&provider=${encodeURIComponent(provider)}`
@@ -427,7 +446,10 @@ export function openDiagnoseStream(
   void (async () => {
     try {
       const res = await fetch(url, {
-        headers: { Accept: 'text/event-stream', ...keyHeaders(cloudKey, cloudModel) },
+        headers: {
+          Accept: 'text/event-stream',
+          ...keyHeaders(cloudKey, cloudModel, cloudProvider),
+        },
         signal: ctrl.signal,
       })
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)

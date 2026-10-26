@@ -28,6 +28,7 @@ from ..config import (CLOUD_API_KEY, CLOUD_BASE_URL, CLOUD_MODEL,
                       CLOUD_PROVIDER, LLM_ENABLED, LLM_HEALTH_CACHE_S,
                       LLM_MODEL, LLM_PREFERRED, OLLAMA_HOST)
 from ..engine.evidence import EvidenceTag
+from . import providers as provider_catalog
 from .client import (PROVIDER_CLOUD, PROVIDER_LOCAL, CloudClient,
                      CloudUnavailable, OllamaClient, OllamaUnavailable, mask_key)
 from .guard import VERDICT_OK, validate
@@ -97,13 +98,15 @@ class LlmService:
                  enabled: bool | None = None,
                  preferred: str | None = None,
                  cloud_key: str = "",
-                 cloud_model: str = "") -> None:
+                 cloud_model: str = "",
+                 cloud_provider: str = "") -> None:
         self.enabled = LLM_ENABLED if enabled is None else enabled
         self.client = client or OllamaClient()
         self.preferred = (preferred or LLM_PREFERRED).strip().lower()
         # 测试者自带的密钥：**只在本次请求内有效**，不落盘、不缓存到下次请求。
         self._key_override = (cloud_key or "").strip()
         self._model_override = (cloud_model or "").strip()
+        self._provider_override = (cloud_provider or "").strip().lower()
         self._cloud_client = cloud_client
         self._cloud_injected = cloud_client is not None
         self._cloud_cfg_sig = ""
@@ -121,9 +124,18 @@ class LlmService:
         （对外一律用 `masked`）。
         """
         api_key = self._key_override or CLOUD_API_KEY
-        model = self._model_override or CLOUD_MODEL
-        provider = CLOUD_PROVIDER
-        base_url = CLOUD_BASE_URL
+        # 服务商：请求头 > 环境变量 > 默认（deepseek）。
+        # 未知 id 一律回落到默认服务商，绝不把任意字符串当地址用。
+        requested = self._provider_override or CLOUD_PROVIDER
+        prov = provider_catalog.resolve(requested) or provider_catalog.default_provider()
+        # base_url 只能来自服务端白名单（或管理员在 .env 里显式指定的镜像），
+        # 绝不接受请求方传入 —— 否则本服务会变成任意地址的代理（SSRF）。
+        base_url = prov.base_url
+        if CLOUD_BASE_URL and requested in ("", CLOUD_PROVIDER) and prov.id == CLOUD_PROVIDER:
+            base_url = CLOUD_BASE_URL
+        model = self._model_override or (
+            CLOUD_MODEL if prov.id == CLOUD_PROVIDER and CLOUD_MODEL else prov.default_model
+        )
         if self._key_override:
             source = "session"
         elif CLOUD_API_KEY:
@@ -131,7 +143,8 @@ class LlmService:
         else:
             source = "none"
         return {
-            "provider": provider,
+            "provider": prov.id,
+            "provider_label": prov.label,
             "base_url": base_url,
             "model": model,
             "api_key": api_key,
@@ -167,7 +180,8 @@ class LlmService:
         if self._cloud_client is not None and self._cloud_cfg_sig == sig:
             return self._cloud_client
         self._cloud_client = CloudClient(
-            base_url=cfg["base_url"], api_key=cfg["api_key"], model=cfg["model"])
+            base_url=cfg["base_url"], api_key=cfg["api_key"], model=cfg["model"],
+            provider_id=cfg["provider"])
         self._cloud_cfg_sig = sig
         return self._cloud_client
 
@@ -335,6 +349,7 @@ class LlmService:
             "active_hint": ("cloud" if (self.preferred in ("cloud", "auto")
                                         and cloud_ready and c_ok) else "local"),
             "cloud_provider": cfg["provider"],
+            "cloud_provider_label": cfg["provider_label"],
             "cloud": {
                 "provider": cfg["provider"],
                 "base_url": cfg["base_url"],

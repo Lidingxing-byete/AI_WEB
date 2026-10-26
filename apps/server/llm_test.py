@@ -253,6 +253,26 @@ def keys() -> None:
     check("不传密钥时来源不是 session",
           LlmService().cloud_config()["source"] != "session")
 
+    # ---- 多服务商（2026-10-26）----
+    from app.llm import providers as pc
+    check("服务商目录至少 6 家", len(pc.catalog()) >= 6, str(len(pc.catalog())))
+    check("未知服务商解析为 None（不猜）", pc.resolve("no-such-provider") is None)
+
+    svc_o = LlmService(cloud_key="sk-unit-test-abcdef123456",
+                       cloud_provider="openai")
+    c_o = svc_o.cloud_config()
+    check("切换服务商后 base_url 来自白名单",
+          c_o["provider"] == "openai" and "api.openai.com" in c_o["base_url"],
+          c_o["base_url"])
+    check("模型默认值随服务商", c_o["model"] == "gpt-4o-mini", c_o["model"])
+
+    svc_o.cloud_probe = lambda force=False: (False, "离线用例跳过探测")  # type: ignore[method-assign]
+    st_o = svc_o.status(probe=False)
+    check("status 标注服务商 id 与名称",
+          st_o["cloud_provider"] == "openai"
+          and "OpenAI" in str(st_o.get("cloud_provider_label")),
+          f"{st_o['cloud_provider']} / {st_o.get('cloud_provider_label')}")
+
 
 def online() -> None:
     print("—— 在线（本机 Ollama）——")

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { Card, EvidenceTag } from './EvidenceTag'
 
@@ -19,7 +19,18 @@ import { Card, EvidenceTag } from './EvidenceTag'
 export function LlmPanel() {
   const { llmNarrative, llmStatus, useLlm, setUseLlm, llmPreferred,
           setLlmPreferred, streaming,
-          testerKey, testerModel, keyCheck, applyTesterKey, clearTesterKey } = useStore()
+          testerKey, testerModel, testerProvider, providers,
+          loadProviders, setTesterProvider,
+          keyCheck, applyTesterKey, clearTesterKey } = useStore()
+
+  useEffect(() => {
+    void loadProviders()
+  }, [loadProviders])
+
+  const currentProvider = useMemo(
+    () => providers.find((p) => p.id === testerProvider) ?? providers[0],
+    [providers, testerProvider],
+  )
 
   const [open, setOpen] = useState(false)
   const [keyInput, setKeyInput] = useState('')
@@ -43,7 +54,7 @@ export function LlmPanel() {
 
   async function doVerify() {
     setBusy(true)
-    const r = await applyTesterKey(keyInput, modelInput)
+    const r = await applyTesterKey(keyInput, testerProvider, modelInput)
     setMsg({ ok: r.ok, text: r.message })
     if (r.ok) {
       setKeyInput('')
@@ -128,7 +139,9 @@ export function LlmPanel() {
                 : 'border-ink-200 bg-ink-50 text-ink-500'
             }`}
           >
-            <span className="font-mono">{cloud.provider}</span>
+            <span className="font-mono">
+              {llmStatus?.cloud_provider_label || cloud.provider}
+            </span>
             <span className="mx-1.5">·</span>
             <span className="font-mono">{cloud.model}</span>
             <span className="mx-1.5">·</span>
@@ -196,22 +209,52 @@ export function LlmPanel() {
                 密钥只随本次请求发到后端内存、用完即丢：<strong>不写数据库、不写文件、不写日志</strong>；
                 页面只显示掩码。测试结束请删除。
               </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <select
+                  className="min-w-[10rem] flex-1 rounded border border-ink-200 px-1.5 py-1 text-[11px] outline-none focus:border-ink-400"
+                  value={testerProvider}
+                  onChange={(e) => {
+                    setTesterProvider(e.target.value)
+                    setModelInput('')
+                  }}
+                >
+                  {providers.length === 0 && (
+                    <option value="deepseek">DeepSeek（深度求索）</option>
+                  )}
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  list="xz-model-options"
+                  className="min-w-[9rem] flex-1 rounded border border-ink-200 px-1.5 py-1 font-mono text-[11px] outline-none focus:border-ink-400"
+                  placeholder={`模型（留空用 ${currentProvider?.default_model ?? '默认'}）`}
+                  value={modelInput}
+                  maxLength={80}
+                  onChange={(e) => setModelInput(e.target.value)}
+                />
+                <datalist id="xz-model-options">
+                  {(currentProvider?.models ?? []).map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              </div>
+              {currentProvider?.note && (
+                <div className="text-[10px] leading-4 text-ink-400">
+                  {currentProvider.note}
+                </div>
+              )}
               <input
                 type="password"
                 autoComplete="off"
                 spellCheck={false}
                 className="w-full rounded border border-ink-200 px-1.5 py-1 font-mono text-[11px] outline-none focus:border-ink-400"
-                placeholder="粘贴你的 API Key（形如 sk-…）"
+                placeholder={`粘贴 ${currentProvider?.label ?? '服务商'} 的 API Key`}
                 value={keyInput}
                 maxLength={200}
                 onChange={(e) => setKeyInput(e.target.value)}
-              />
-              <input
-                className="w-full rounded border border-ink-200 px-1.5 py-1 font-mono text-[11px] outline-none focus:border-ink-400"
-                placeholder="模型名（可留空，默认 deepseek-chat）"
-                value={modelInput}
-                maxLength={64}
-                onChange={(e) => setModelInput(e.target.value)}
               />
               <div className="flex items-center gap-1.5">
                 <button

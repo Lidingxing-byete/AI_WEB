@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import {
   api,
   openDiagnoseStream,
+  type CloudProviderInfo,
   type VerifyKeyResult,
   type Followup,
   type HardwareEvidence,
@@ -70,10 +71,18 @@ interface State {
    */
   testerKey: string
   testerModel: string
+  /** 测试者选择的云端服务商（服务端白名单里的 id） */
+  testerProvider: string
+  /** 服务端可选服务商目录（只读） */
+  providers: CloudProviderInfo[]
   /** 最近一次密钥校验结果（ok/masked/reason） */
   keyCheck: VerifyKeyResult | null
   /** 保存（本标签页）并校验；返回 {ok, message} 供界面提示 */
-  applyTesterKey: (key: string, model?: string) => Promise<{ ok: boolean; message: string }>
+  applyTesterKey: (key: string, provider?: string,
+                   model?: string) => Promise<{ ok: boolean; message: string }>
+  /** 拉取可选服务商（失败时保持空列表，不阻塞主流程） */
+  loadProviders: () => Promise<void>
+  setTesterProvider: (id: string) => void
   /** 删除本标签页里的密钥（测试结束必须点它） */
   clearTesterKey: () => void
 
@@ -151,6 +160,7 @@ const RECORDER_KEY = 'xz_recorded_by'
 // 测试者的密钥不会被长期留在这台机器的浏览器里。
 const TESTER_KEY = 'xz_tester_cloud_key'
 const TESTER_MODEL = 'xz_tester_cloud_model'
+const TESTER_PROVIDER = 'xz_tester_cloud_provider'
 
 /** 记录人默认值：不写死任何个人姓名，用户可改（存本机）。 */
 function loadRecorder(): string {
@@ -175,6 +185,14 @@ function loadTesterModel(): string {
     return sessionStorage.getItem(TESTER_MODEL) || ''
   } catch {
     return ''
+  }
+}
+
+function loadTesterProvider(): string {
+  try {
+    return sessionStorage.getItem(TESTER_PROVIDER) || 'deepseek'
+  } catch {
+    return 'deepseek'
   }
 }
 
@@ -210,6 +228,8 @@ export const useStore = create<State>((set, get) => ({
   llmPreferred: 'auto',
   testerKey: loadTesterKey(),
   testerModel: loadTesterModel(),
+  testerProvider: loadTesterProvider(),
+  providers: [],
   keyCheck: null,
   recordedBy: loadRecorder(),
   error: null,
@@ -222,18 +242,24 @@ export const useStore = create<State>((set, get) => ({
     set({ llmPreferred: p })
   },
 
-  async applyTesterKey(key: string, model = '') {
+  async applyTesterKey(key: string, provider = 'deepseek', model = '') {
     const k = key.trim()
     if (k.length < 8) {
       return { ok: false, message: '密钥看起来不完整（至少 8 位）' }
     }
     try {
-      const r = await api.verifyCloudKey(k, model.trim())
+      const r = await api.verifyCloudKey(k, provider, model.trim())
       // 无论校验是否通过都先记到本标签页：失败也要能看到"是哪把钥匙失败了"
-      set({ testerKey: k, testerModel: model.trim(), keyCheck: r })
+      set({
+        testerKey: k,
+        testerModel: model.trim(),
+        testerProvider: provider,
+        keyCheck: r,
+      })
       try {
         sessionStorage.setItem(TESTER_KEY, k)
         sessionStorage.setItem(TESTER_MODEL, model.trim())
+        sessionStorage.setItem(TESTER_PROVIDER, provider)
       } catch {
         /* 隐私模式：只在内存里用，仍可工作 */
       }
@@ -241,11 +267,29 @@ export const useStore = create<State>((set, get) => ({
       return {
         ok: r.ok,
         message: r.ok
-          ? `密钥可用（${r.masked}·${r.model}）：仅保存在本标签页，测试结束请点「删除密钥」`
-          : `校验未通过：${r.reason}。请检查 Key 是否正确、账户是否有额度`,
+          ? `密钥可用（${r.provider_label} · ${r.model} · ${r.masked}）：仅保存在本标签页，测试结束请点「删除密钥」`
+          : `校验未通过：${r.reason}。请检查 Key、服务商是否选对、账户是否有额度`,
       }
     } catch (e: unknown) {
       return { ok: false, message: `校验请求失败：${errText(e)}` }
+    }
+  },
+
+  async loadProviders() {
+    try {
+      const r = await api.getCloudProviders()
+      set({ providers: r.items })
+    } catch {
+      set({ providers: [] })
+    }
+  },
+
+  setTesterProvider(id: string) {
+    set({ testerProvider: id })
+    try {
+      sessionStorage.setItem(TESTER_PROVIDER, id)
+    } catch {
+      /* 忽略 */
     }
   },
 
@@ -304,7 +348,8 @@ export const useStore = create<State>((set, get) => ({
   async loadLlmStatus() {
     try {
       // 带上本标签页的密钥：后端据此显示"我的密钥是否可用"（不保存）
-      const s = await api.getLlmStatus(get().testerKey, get().testerModel)
+      const s = await api.getLlmStatus(
+        get().testerKey, get().testerModel, get().testerProvider)
       set({ llmStatus: s })
     } catch {
       // 探测失败按"离线"处理：系统仍可正常诊断（纯规则层）
@@ -470,7 +515,8 @@ export const useStore = create<State>((set, get) => ({
         }
       },
       onClose: () => finish(),
-    }, get().useLlm, get().llmPreferred, get().testerKey, get().testerModel)
+    }, get().useLlm, get().llmPreferred, get().testerKey, get().testerModel,
+       get().testerProvider)
     })
   },
 
@@ -530,7 +576,8 @@ export const useStore = create<State>((set, get) => ({
         match,
         recorded_by: get().recordedBy,
       })
-      await api.reassess(id, get().useLlm, get().llmPreferred, get().testerKey, get().testerModel)
+      await api.reassess(id, get().useLlm, get().llmPreferred, get().testerKey,
+        get().testerModel, get().testerProvider)
       await get().refreshResults()
       set({ error: null })
     } catch (e: unknown) {
@@ -579,7 +626,8 @@ export const useStore = create<State>((set, get) => ({
       await api.patchTask(id, { observed_baud: baud, observed_baud_source: source })
       const t = await api.getTask(id)
       set({ task: t })
-      await api.reassess(id, get().useLlm, get().llmPreferred, get().testerKey, get().testerModel)
+      await api.reassess(id, get().useLlm, get().llmPreferred, get().testerKey,
+        get().testerModel, get().testerProvider)
       await get().refreshResults()
       set({ error: null })
     } catch (e: unknown) {
@@ -610,7 +658,8 @@ export const useStore = create<State>((set, get) => ({
         note: meta.note ?? '',
         observed_baud: meta.observed_baud,
       })
-      await api.reassess(id, get().useLlm, get().llmPreferred, get().testerKey, get().testerModel)
+      await api.reassess(id, get().useLlm, get().llmPreferred, get().testerKey,
+        get().testerModel, get().testerProvider)
       await get().refreshResults()
       set({ error: null })
     } catch (e: unknown) {

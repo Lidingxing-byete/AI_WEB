@@ -36,6 +36,7 @@ from app.config import (
     OLLAMA_HOST,
 )
 from app.engine.orchestrator import DiagnosticEngine, DiagnosticRequest
+from app.llm import providers as provider_catalog
 from app.engine.serialcap import match_phenomena, parse_serial_capture
 from app.corpus.loader import load_cards, rules_by_id
 
@@ -313,7 +314,8 @@ def _load_request(tid: str, use_llm: bool = False) -> DiagnosticRequest:
 @app.get("/api/tasks/{tid}/diagnose")
 def diagnose_stream(tid: str, use_llm: bool = False, provider: str = "",
                     x_cloud_key: str | None = Header(default=None),
-                    x_cloud_model: str | None = Header(default=None)) -> StreamingResponse:
+                    x_cloud_model: str | None = Header(default=None),
+                    x_cloud_provider: str | None = Header(default=None)) -> StreamingResponse:
     """SSE：触发诊断并流式推送**真实执行过程**。
 
     `use_llm=1` 时启用模型解读（T-08）。默认关闭：
@@ -329,7 +331,8 @@ def diagnose_stream(tid: str, use_llm: bool = False, provider: str = "",
         engine = DiagnosticEngine(llm=_llm_service(
             preferred=provider or "cloud",
             cloud_key=(x_cloud_key or "").strip(),
-            cloud_model=(x_cloud_model or "").strip()))
+            cloud_model=(x_cloud_model or "").strip(),
+            cloud_provider=(x_cloud_provider or "").strip()))
 
     q: queue.Queue[tuple[str, dict] | None] = queue.Queue()
 
@@ -377,7 +380,8 @@ def diagnose_stream(tid: str, use_llm: bool = False, provider: str = "",
 @app.post("/api/tasks/{tid}/reassess")
 def reassess(tid: str, use_llm: bool = False, provider: str = "",
              x_cloud_key: str | None = Header(default=None),
-             x_cloud_model: str | None = Header(default=None)) -> dict:
+             x_cloud_model: str | None = Header(default=None),
+             x_cloud_provider: str | None = Header(default=None)) -> dict:
     """补充材料后**重新诊断**（同步端点）。
 
     用途：用户在回填实测波特率 / 实际晶振等信息后再次触发诊断，
@@ -394,7 +398,8 @@ def reassess(tid: str, use_llm: bool = False, provider: str = "",
         engine = DiagnosticEngine(llm=_llm_service(
             preferred=provider or "cloud",
             cloud_key=(x_cloud_key or "").strip(),
-            cloud_model=(x_cloud_model or "").strip()))
+            cloud_model=(x_cloud_model or "").strip(),
+            cloud_provider=(x_cloud_provider or "").strip()))
     report = engine.run(req)
     _persist_report(tid, report)
     return {
@@ -417,7 +422,7 @@ _llm: Any = None
 
 
 def _llm_service(preferred: str = "", cloud_key: str = "",
-                 cloud_model: str = "") -> Any:
+                 cloud_model: str = "", cloud_provider: str = "") -> Any:
     """惰性创建模型服务：构造引擎/启动服务时都不应触发网络探测。
 
     `preferred` 非空时按请求覆盖默认偏好（local / cloud / auto）；
@@ -427,7 +432,8 @@ def _llm_service(preferred: str = "", cloud_key: str = "",
     if cloud_key:
         from app.llm.service import LlmService
         return LlmService(preferred=preferred or "cloud",
-                          cloud_key=cloud_key, cloud_model=cloud_model)
+                          cloud_key=cloud_key, cloud_model=cloud_model,
+                          cloud_provider=cloud_provider)
     if _llm is None:
         from app.llm.service import LlmService
         _llm = LlmService()
@@ -440,14 +446,16 @@ def _llm_service(preferred: str = "", cloud_key: str = "",
 @app.get("/api/llm/status")
 def llm_status(probe: bool = True,
                x_cloud_key: str | None = Header(default=None),
-               x_cloud_model: str | None = Header(default=None)) -> dict:
+               x_cloud_model: str | None = Header(default=None),
+               x_cloud_provider: str | None = Header(default=None)) -> dict:
     """模型层可用状态（本地 + 云端双来源）。
 
     带 `X-Cloud-Key` 时按该密钥探测云端（前端用来显示"我的密钥是否可用"），
     密钥只用于本次探测，**不保存**。
     """
     svc = _llm_service(cloud_key=(x_cloud_key or "").strip(),
-                       cloud_model=(x_cloud_model or "").strip())
+                       cloud_model=(x_cloud_model or "").strip(),
+                       cloud_provider=(x_cloud_provider or "").strip())
     return svc.status(probe=probe)
 
 
@@ -466,7 +474,9 @@ def llm_status(probe: bool = True,
 # ----------------------------------------------------------------------
 class VerifyKeyIn(BaseModel):
     api_key: str = Field(..., min_length=8, max_length=200)
-    model: str = Field("", max_length=64, pattern=r"^[A-Za-z0-9._:-]*$")
+    provider: str = Field("deepseek", max_length=40)
+    # 模型名允许字母数字与 . _ : / -（SiliconFlow 这类带斜杠）
+    model: str = Field("", max_length=80, pattern=r"^[A-Za-z0-9._:/-]*$")
 
 
 _VERIFY_HITS: dict[str, list[float]] = {}
@@ -487,15 +497,30 @@ def verify_cloud_key(body: VerifyKeyIn, request: Request) -> dict:
     """校验测试者提供的密钥是否可用。**不保存**，校验完即丢。"""
     _rate_limit((request.client.host if request.client else "?") + ":verify")
     from app.llm.client import CloudClient, mask_key
-    cc = CloudClient(api_key=body.api_key.strip(),
-                     model=(body.model or "").strip() or CLOUD_MODEL)
+    prov = provider_catalog.resolve(body.provider)
+    if prov is None:
+        raise HTTPException(422, f"未知服务商：{body.provider}")
+    model = (body.model or "").strip() or prov.default_model
+    cc = CloudClient(base_url=prov.base_url, api_key=body.api_key.strip(),
+                     model=model, provider_id=prov.id)
     ok = cc.health()
     return {
         "ok": ok,
         "masked": mask_key(body.api_key),
-        "model": cc.model,
-        "reason": "" if ok else "密钥无效或云端不可达（请检查 Key 与网络）",
+        "provider": prov.id,
+        "provider_label": prov.label,
+        "model": model,
+        "reason": "" if ok else f"{prov.label} 密钥无效或不可达（检查 Key 与网络）",
         "storage": "none",
+    }
+
+
+@app.get("/api/llm/providers")
+def llm_providers() -> dict:
+    """可选云端服务商（白名单）。前端下拉直接用它，新增服务商只改后端预设表。"""
+    return {
+        "items": provider_catalog.catalog(),
+        "default": provider_catalog.DEFAULT_PROVIDER_ID,
     }
 
 

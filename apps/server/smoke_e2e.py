@@ -432,6 +432,22 @@ def main() -> int:
     check(fake_key not in json.dumps(stt, ensure_ascii=False),
           "状态响应不含明文密钥")
 
+    # ---- 25b. 多服务商目录与校验 ----
+    _, prov = _req("GET", "/llm/providers")
+    ids = [x.get("id") for x in prov.get("items", [])]
+    check(len(ids) >= 6 and "deepseek" in ids and "qwen" in ids,
+          "服务商目录含多家（≥6，且含中国可直连的）", str(ids[:8]))
+    check(all(x.get("base_url", "").startswith("https://") for x in prov.get("items", [])),
+          "所有服务商地址均为 https（密钥不明文传输）")
+    st_bp, _ = _req("POST", "/llm/verify-key",
+                    {"api_key": fake_key, "provider": "no-such"})
+    check(st_bp == 422, "未知服务商被 422 拒绝（白名单）", f"HTTP {st_bp}")
+    _, vq = _req("POST", "/llm/verify-key",
+                 {"api_key": fake_key, "provider": "qwen"})
+    check(vq.get("provider") == "qwen" and vq.get("ok") is False,
+          "按所选服务商校验（qwen）并如实返回不可用",
+          f"{vq.get('provider')} / {str(vq.get('reason'))[:24]}")
+
     # ---- 汇总 ----
     ok = sum(1 for r in _results if r[0])
     total = len(_results)

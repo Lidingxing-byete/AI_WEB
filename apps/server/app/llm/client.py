@@ -230,10 +230,14 @@ class CloudClient:
         timeout_s: float = CLOUD_TIMEOUT_S,
         temperature: float = LLM_TEMPERATURE,
         num_predict: int = LLM_MAX_TOKENS,
+        provider_id: str = "deepseek",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
+        # 记录用标签：deepseek -> "deepseek-cloud"，其余 -> "<id>-cloud"
+        self.provider_id = provider_id
+        self.provider_label = f"{provider_id}-cloud"
         self.timeout_s = timeout_s
         self.temperature = temperature
         self.num_predict = num_predict
@@ -260,7 +264,7 @@ class CloudClient:
         json_mode: bool = True,
     ) -> tuple[str, LlmCallRecord]:
         """调用 /chat/completions，返回 (原始文本, 调用记录)。"""
-        rec = LlmCallRecord(provider=PROVIDER_CLOUD, model=self.model,
+        rec = LlmCallRecord(provider=self.provider_label, model=self.model,
                             temperature=self.temperature,
                             num_predict=self.num_predict, prompt_chars=len(prompt))
         messages: list[dict] = []
