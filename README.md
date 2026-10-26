@@ -74,8 +74,9 @@ FastAPI (apps/server)
 - Node.js 18+（开发用 22.x）
 - （可选）本地 Ollama `http://127.0.0.1:11434`，已拉取 `qwen2.5-coder:7b`（默认，另有 7b / 3b 备选）
   —— 没有也不影响：自动走纯规则层
-- （可选）云端模型：**测试者自带 Key**，支持 8 家 OpenAI 兼容服务商
-  （DeepSeek / 通义千问 / Kimi / 智谱 GLM / 硅基流动 / OpenAI / OpenRouter / Groq），
+- （可选）云端模型：**测试者自带 Key**，支持 10 家 OpenAI 兼容服务商
+  （DeepSeek / 通义千问 / Kimi / 智谱 GLM / 豆包 / 文心一言 / 硅基流动 / OpenAI / OpenRouter / Groq，
+  国内 6 家在前、需境外网络的标注在后），
   页面里选服务商 + 填 Key 即可。密钥只存本标签页（sessionStorage），随请求头传给后端、
   用完即丢，不写库/不写文件/不写日志；测试结束点「删除密钥」或关标签页即清除。
   站长也可在 `apps/server/.env` 填 `XZ_CLOUD_API_KEY` 作为兜底；都没有则云端自动跳过，克隆即跑。

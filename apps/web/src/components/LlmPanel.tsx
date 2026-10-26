@@ -224,6 +224,7 @@ export function LlmPanel() {
                   {providers.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.label}
+                      {p.region === 'intl' ? '（需境外网络）' : ''}
                     </option>
                   ))}
                 </select>

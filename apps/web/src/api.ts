@@ -96,6 +96,8 @@ export interface CloudProviderInfo {
   default_model: string
   models: string[]
   note: string
+  /** cn = 国内可直连；intl = 需境外网络 */
+  region?: 'cn' | 'intl'
 }
 
 /** 密钥校验结果。**永远只有掩码**，明文只在请求头里传一次。 */
