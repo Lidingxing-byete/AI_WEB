@@ -39,6 +39,7 @@ apps/server/data/
 /docs/Phase7_*.md
 /docs/README.md
 /docs/项目进度总结_*.md
+/docs/0[1-4]_*.md
 
 # ---- 编辑器 / 系统 ----
 .vscode/
