@@ -381,6 +381,38 @@ def main() -> int:
     check(all(t.get("description") for t in tl.get("items", [])),
           "每个工具都有职责说明")
 
+    # ---- 23. 健康检查/模型状态如实（2026-10-26 加固） ----
+    _, hv = _req("GET", "/health")
+    ml = hv.get("model_layer", {})
+    check(str(ml.get("provider", "")).count("cloud") == 1
+          and ml.get("fallback") == "rule",
+          "健康检查如实报告三级降级链（云端→本地→规则层）",
+          str(ml.get("provider")))
+    check("Phase 3" not in str(ml.get("note", ""))
+          and "不接模型" not in str(ml.get("note", "")),
+          "健康检查不再残留'先纯规则层/不接模型'的过期说明")
+    _, ms = _req("GET", "/models/status")
+    lv = {x.get("level"): x for x in ms.get("levels", [])}
+    check(lv.get("L3", {}).get("status") == "always_available",
+          "模型状态区分'配置态'：规则层始终可用")
+    check(lv.get("L1", {}).get("configured") is False,
+          "未填密钥时云端 L1 如实标为未配置（不假装可用）")
+
+    # ---- 24. 任务软删除与状态白名单 ----
+    st_new, tmp_task = _req("POST", "/tasks", {"title": "删除用例临时任务"})
+    tmp_id = tmp_task.get("id", "")
+    check(st_new == 200 and bool(tmp_id), "创建临时任务（删除用例）")
+    st_del, _ = _req("DELETE", f"/tasks/{tmp_id}")
+    check(st_del == 200, "任务可软删除", f"HTTP {st_del}")
+    st_gone, _ = _req("GET", f"/tasks/{tmp_id}")
+    check(st_gone == 404, "已删除任务不可再直接访问", f"HTTP {st_gone}")
+    _, lst2 = _req("GET", "/tasks")
+    check(all(t.get("id") != tmp_id for t in lst2.get("items", [])),
+          "已删除任务不再出现在任务列表")
+    st_bad, _ = _req("PATCH", f"/tasks/{tid}", {"status": "hacked"})
+    check(st_bad == 422, "非法任务状态被 422 拒绝（状态白名单）",
+          f"HTTP {st_bad}")
+
     # ---- 汇总 ----
     ok = sum(1 for r in _results if r[0])
     total = len(_results)

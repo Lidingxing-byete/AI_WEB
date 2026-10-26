@@ -57,3 +57,6 @@ deliverables/技术文档.html
 
 # 内部工作文档（不入公开仓库）
 /deliverables/提交前终检清单.md
+
+# 演示视频（体积大，按赛事要求单独作为附件提交，不进代码仓库）
+deliverables/*.mp4

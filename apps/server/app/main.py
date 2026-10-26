@@ -26,7 +26,17 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app import db
-from app.config import CHIP_F103C8T6, LLM_ENABLED, LLM_MODEL, LLM_TIMEOUT_S, OLLAMA_HOST
+from app.config import (
+    CHIP_F103C8T6,
+    CLOUD_API_KEY,
+    CLOUD_MODEL,
+    CLOUD_PROVIDER,
+    LLM_ENABLED,
+    LLM_MODEL,
+    LLM_PREFERRED,
+    LLM_TIMEOUT_S,
+    OLLAMA_HOST,
+)
 from app.engine.orchestrator import DiagnosticEngine, DiagnosticRequest
 from app.engine.serialcap import match_phenomena, parse_serial_capture
 from app.corpus.loader import load_cards, rules_by_id
@@ -52,7 +62,7 @@ _engine = DiagnosticEngine()
 # ======================================================================
 class TaskCreate(BaseModel):
     title: str = Field("未命名诊断任务", max_length=200)
-    chip: str = CHIP_F103C8T6["name"]
+    chip: str = Field(CHIP_F103C8T6["name"], max_length=40)
     symptom_text: str = Field("", max_length=2000)
     pclk2_hz: int | None = None
     pclk1_hz: int | None = None
@@ -65,7 +75,9 @@ class TaskCreate(BaseModel):
 class TaskPatch(BaseModel):
     title: str | None = Field(None, max_length=200)
     symptom_text: str | None = Field(None, max_length=2000)
-    status: str | None = None
+    # 状态机只有这三个取值（引擎落库时写后两个）；不加白名单会让任意字符串
+    # 进库，前端状态标签会退化成原始英文，历史筛选也会失效。
+    status: str | None = Field(None, pattern="^(created|awaiting_verification|insufficient)$")
     pclk2_hz: int | None = None
     pclk1_hz: int | None = None
     actual_hse_hz: int | None = None
@@ -121,15 +133,27 @@ class TestResultIn(BaseModel):
 # ======================================================================
 @app.get("/api/health")
 def health() -> dict:
+    """服务自检。**只报配置态，不做网络探测**，保证探活永远快。
+
+    `model_layer` 必须与现状一致：三级降级链已接入（云端 DeepSeek →
+    本地 Ollama → 规则层），模型只做解释、不参与根因判定。
+    真实"此刻能不能用"由 `/api/llm/status` 探测后给出，不在这里假装。
+    """
     cards = load_cards()
     return {
         "ok": True,
         "version": "0.1.0",
         "model_layer": {
-            "provider": "none",
-            "level": "rule",
-            "degraded": False,
-            "note": "Phase 3 决策：先纯规则层，不接模型",
+            "provider": "cloud+local+rule",
+            "level": "L1-L3",
+            "degraded": not LLM_ENABLED,
+            "cloud_configured": bool(CLOUD_API_KEY),
+            "local_enabled": LLM_ENABLED,
+            "fallback": "rule",
+            "preferred": LLM_PREFERRED,
+            "note": ("云端 DeepSeek → 本地 Ollama → 规则层 三级降级；"
+                     "模型只解释已查出的结论，输出恒为 [推断]，不参与根因判定；"
+                     "可用性以 /api/llm/status 的探测结果为准"),
         },
         "corpus": {"rules": len(rules_by_id()), "cards": len(cards)},
     }
@@ -137,16 +161,30 @@ def health() -> dict:
 
 @app.get("/api/models/status")
 def models_status() -> dict:
+    """三级降级链的**配置态**（不联网）。
+
+    这里回答"装了哪几级、默认先走哪级"；"现在能不能用"由
+    `/api/llm/status` 探测后给出。两者分开，避免把配置当可用性。
+    """
+    cloud_on = bool(CLOUD_API_KEY)
+    levels = [
+        {"level": "L1", "provider": CLOUD_PROVIDER, "model": CLOUD_MODEL,
+         "configured": cloud_on,
+         "status": "configured" if cloud_on else "not_configured",
+         "reason": "" if cloud_on else "XZ_CLOUD_API_KEY 未配置，自动跳过"},
+        {"level": "L2", "provider": "ollama", "model": LLM_MODEL,
+         "configured": LLM_ENABLED,
+         "status": "enabled" if LLM_ENABLED else "disabled",
+         "reason": "" if LLM_ENABLED else "XZ_LLM_ENABLED=0"},
+        {"level": "L3", "provider": "rule", "model": "deterministic-rules",
+         "configured": True, "status": "always_available",
+         "reason": "确定性规则层，始终可用（模型不可用时的兜底）"},
+    ]
     return {
-        "levels": [
-            {"level": "L1", "provider": "cloud", "available": False,
-             "reason": "Phase 3 未接入"},
-            {"level": "L2", "provider": "ollama", "available": False,
-             "reason": "Phase 3 未接入"},
-            {"level": "L3", "provider": "rule", "available": True,
-             "reason": "确定性规则层，始终可用"},
-        ],
-        "current": "L3",
+        "levels": levels,
+        "current": ("L1" if cloud_on else "L2") if LLM_ENABLED else "L3",
+        "preferred": LLM_PREFERRED,
+        "note": "配置态，不代表当前可用；实时可用性见 /api/llm/status",
     }
 
 

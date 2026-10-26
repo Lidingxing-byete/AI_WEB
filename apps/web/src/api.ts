@@ -230,6 +230,10 @@ export const api = {
 
   getTask: (id: string) => req<Task>(`/tasks/${id}`),
 
+  /** 软删除任务：后端置 deleted=1，列表不再返回；实测记录保留在库里。 */
+  deleteTask: (id: string) =>
+    req<{ id: string; deleted: boolean }>(`/tasks/${id}`, { method: 'DELETE' }),
+
   addArtifact: (id: string, kind: string, name: string, content: string) =>
     req<{ id: string }>(`/tasks/${id}/artifacts`, {
       method: 'POST',

@@ -9,7 +9,9 @@ export default function App() {
   const {
     task,
     error,
+    clearError,
     backendUp,
+    taskLoading,
     checkHealth,
     loadTools,
     loadSamples,
@@ -28,6 +30,20 @@ export default function App() {
     void loadSamples()
     void loadLlmStatus()
   }, [checkHealth, loadTools, loadSamples, loadLlmStatus])
+
+  // 连通性轮询：后端中途挂掉时，顶栏不能还亮着"已连接"。
+  // 20s 一次（对本地服务开销可忽略），页面重新可见时立即补一次。
+  useEffect(() => {
+    const timer = window.setInterval(() => void checkHealth(), 20_000)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void checkHealth()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [checkHealth])
 
   return (
     <div className="flex h-full flex-col bg-ink-50 text-ink-900">
@@ -97,9 +113,23 @@ export default function App() {
         </div>
       )}
 
+      {/* 切换任务时立刻给反馈：否则"任务已选中但结果还没到"会被误读成"没检出" */}
+      {taskLoading && (
+        <div className="flex items-center gap-2 border-b border-ink-200 bg-white px-4 py-1 text-[11px] text-ink-500">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
+          正在载入该任务的诊断数据…
+        </div>
+      )}
+
       {error && (
-        <div className="border-b border-rose-200 bg-rose-50 px-4 py-1.5 text-[12px] text-rose-700">
-          {error}
+        <div className="flex items-center justify-between border-b border-rose-200 bg-rose-50 px-4 py-1.5 text-[12px] text-rose-700">
+          <span>{error}</span>
+          <button
+            onClick={clearError}
+            className="ml-3 shrink-0 rounded border border-rose-300 px-2 py-0.5 text-[11px] hover:bg-rose-100"
+          >
+            关闭
+          </button>
         </div>
       )}
 
@@ -109,7 +139,9 @@ export default function App() {
         </div>
       )}
 
-      {task && !streaming && hypotheses.length === 0 && (
+      {/* 只在"确实诊断过"的任务上提示未检出：
+          刚建好还没跑诊断的任务不该被说成"本轮未检出"（那是误报）。 */}
+      {task && task.status !== 'created' && !streaming && hypotheses.length === 0 && (
         <div className="flex items-center justify-center border-b border-ink-200 bg-ink-100 px-4 py-1.5 text-[12px] text-ink-600">
           本轮未检出配置违规。可能是材料不足（看中栏「无法判定的项」），也可能是这份代码确实没问题。
         </div>

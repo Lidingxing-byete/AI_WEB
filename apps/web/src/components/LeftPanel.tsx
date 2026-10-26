@@ -31,7 +31,8 @@ const TASK_STATUS_FILTERS: { value: string; label: string }[] = [
  */
 export function LeftPanel() {
   const { task, artifacts, addSource, newTask, runDiagnose, streaming, loadTasks, tasks,
-    hwEvidence, submitSerialCapture, removeHwEvidence,
+    hwEvidence, submitSerialCapture, removeHwEvidence, deleteTask,
+    recordedBy, setRecordedBy,
     samples, loadSamples, loadDemo, demoSampleId } = useStore()
   const [code, setCode] = useState('')
   const [capture, setCapture] = useState('')
@@ -131,7 +132,26 @@ export function LeftPanel() {
             <div className="font-medium text-ink-800">{task.title}</div>
             <div>芯片：{task.chip}</div>
             <div>PCLK2：{task.pclk2_hz ? `${task.pclk2_hz / 1e6} MHz` : '未设置'}</div>
-            <div>状态：{task.status}</div>
+            <div className="flex items-center gap-1.5">
+              状态：
+              <span
+                className={`rounded px-1 text-[10px] ${
+                  TASK_STATUS_STYLE[task.status] ?? 'bg-ink-100 text-ink-500'
+                }`}
+              >
+                {TASK_STATUS_LABEL[task.status] ?? task.status}
+              </span>
+            </div>
+            <label className="mt-1 flex items-center gap-1.5 text-[11px] text-ink-500">
+              记录人
+              <input
+                className="min-w-0 flex-1 rounded border border-ink-200 px-1.5 py-0.5 text-[11px] outline-none focus:border-ink-400"
+                value={recordedBy}
+                maxLength={40}
+                onChange={(e) => setRecordedBy(e.target.value)}
+                title="写进每条实测证据（[实测-硬件] 必须可追溯），存在本机浏览器"
+              />
+            </label>
           </div>
         </Card>
       )}
@@ -212,7 +232,7 @@ export function LeftPanel() {
         </Card>
       )}
 
-      {task && hwEvidence.length >= 0 && (
+      {task && (
         <Card title={`硬件实测记录（${hwEvidence.length}）`}>
           <div className="space-y-2">
             <textarea
@@ -221,6 +241,10 @@ export function LeftPanel() {
               onChange={(e) => setCapture(e.target.value)}
               placeholder="粘贴串口助手 / Web Serial 抓到的原始帧（真实采集，勿手敲）"
             />
+            <div className="text-[10px] text-ink-400">
+              记录人：<span className="font-mono text-ink-600">{recordedBy}</span>
+              （在「当前任务」卡里改）
+            </div>
             <div className="flex gap-2">
               <select
                 className="flex-1 rounded border border-ink-200 px-1.5 py-1 text-[12px] outline-none"
@@ -316,10 +340,10 @@ export function LeftPanel() {
             ) : (
               <ul className="space-y-1">
                 {filteredTasks.map((t) => (
-                  <li key={t.id}>
+                  <li key={t.id} className="group flex items-start gap-1">
                     <button
                       onClick={() => void useStore.getState().selectTask(t.id)}
-                      className={`w-full rounded px-2 py-1.5 text-left hover:bg-ink-50 ${
+                      className={`min-w-0 flex-1 rounded px-2 py-1.5 text-left hover:bg-ink-50 ${
                         task?.id === t.id ? 'bg-ink-100' : ''
                       }`}
                     >
@@ -342,6 +366,18 @@ export function LeftPanel() {
                       <div className="truncate text-[10px] text-ink-400">
                         {t.symptom_text || '（无现象描述）'}
                       </div>
+                    </button>
+                    <button
+                      title="删除任务（软删除，实测记录仍保留在本地库中）"
+                      aria-label={`删除任务 ${t.title}`}
+                      onClick={() => {
+                        if (window.confirm(`删除任务「${t.title}」？\n（软删除：列表不再显示，实测记录仍留在本地数据库）`)) {
+                          void deleteTask(t.id)
+                        }
+                      }}
+                      className="mt-1 shrink-0 rounded px-1 text-[11px] text-ink-300 opacity-0 hover:bg-rose-50 hover:text-rose-600 focus:opacity-100 group-hover:opacity-100"
+                    >
+                      ✕
                     </button>
                   </li>
                 ))}

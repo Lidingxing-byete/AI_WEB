@@ -51,6 +51,8 @@ interface State {
   samples: Sample[]
   /** 后端连通状态。断线时不显示"诊断完成"这类误导信息。 */
   backendUp: boolean | null
+  /** 正在切换任务 / 拉取该任务的全量结果。用于显示"载入中"，避免空白误读成"没结果" */
+  taskLoading: boolean
   /** 当前任务若来自内置样例，记录样例 id，用于"预期 vs 实际"对照 */
   demoSampleId: string | null
 
@@ -61,7 +63,15 @@ interface State {
   /** 模型来源偏好：auto（云端就绪优先）/ local / cloud（失败自动降级） */
   llmPreferred: 'auto' | 'local' | 'cloud'
 
+  /** 实测记录人：写进每条实测证据，避免固定写死某个人名（可改，存 localStorage） */
+  recordedBy: string
+  setRecordedBy: (name: string) => void
+  /** 删除（软删除）任务：后端已有 DELETE 端点，前端提供入口 */
+  deleteTask: (id: string) => Promise<void>
+
   error: string | null
+  /** 清空错误提示（用户看过之后手动关闭） */
+  clearError: () => void
 
   loadTasks: () => Promise<void>
   selectTask: (id: string) => Promise<void>
@@ -92,6 +102,47 @@ interface State {
 let closeStream: (() => void) | null = null
 let eventSeq = 0
 
+/**
+ * 任务级状态：切换 / 新建任务时必须整体清空。
+ * 否则上一轮的工具留痕、实测记录、现象比对会留在新任务界面上——
+ * 看起来像"新任务已经诊断过"，属于会误导人的状态泄漏。
+ */
+const EMPTY_TASK_SCOPED = {
+  artifacts: [] as State['artifacts'],
+  events: [] as StreamEvent[],
+  streaming: false,
+  hypotheses: [] as Hypothesis[],
+  unknowns: [] as UnknownItem[],
+  references: [] as Reference[],
+  verifications: [] as Verification[],
+  trace: [] as TraceStep[],
+  toolRuns: [] as ToolRun[],
+  runStats: null as State['runStats'],
+  followups: [] as Followup[],
+  hwEvidence: [] as HardwareEvidence[],
+  phenomenon: null as any,
+  phenomMatches: [] as PhenomMatch[],
+  llmNarrative: null as LlmNarrative | null,
+  demoSampleId: null as string | null,
+}
+
+/** 统一错误文案：HTTP 错误与网络错误都能显示出来，避免 Promise 静默失败。 */
+function errText(e: unknown): string {
+  const m = (e as any)?.message
+  return typeof m === 'string' && m ? m : String(e)
+}
+
+const RECORDER_KEY = 'xz_recorded_by'
+
+/** 记录人默认值：不写死任何个人姓名，用户可改（存本机）。 */
+function loadRecorder(): string {
+  try {
+    return localStorage.getItem(RECORDER_KEY) || '本机用户'
+  } catch {
+    return '本机用户'
+  }
+}
+
 export const useStore = create<State>((set, get) => ({
   tasks: [],
   task: null,
@@ -112,6 +163,7 @@ export const useStore = create<State>((set, get) => ({
   tools: [],
   samples: [],
   backendUp: null,
+  taskLoading: false,
   demoSampleId: null,
   llmStatus: null,
   llmNarrative: null,
@@ -121,6 +173,7 @@ export const useStore = create<State>((set, get) => ({
   // 模型来源偏好（与后端 XZ_LLM_PREFERRED 对应，前端可运行时切换）：
   // auto=云端就绪优先否则本地；local=固定本地；cloud=固定云端（失败自动降级本地）
   llmPreferred: 'auto',
+  recordedBy: loadRecorder(),
   error: null,
 
   async setUseLlm(on: boolean) {
@@ -129,6 +182,20 @@ export const useStore = create<State>((set, get) => ({
 
   async setLlmPreferred(p: 'auto' | 'local' | 'cloud') {
     set({ llmPreferred: p })
+  },
+
+  setRecordedBy(name: string) {
+    const v = name.trim().slice(0, 40) || '本机用户'
+    set({ recordedBy: v })
+    try {
+      localStorage.setItem(RECORDER_KEY, v)
+    } catch {
+      /* 隐私模式 / 禁用存储：只影响下次默认值，不影响本次记录 */
+    }
+  },
+
+  clearError() {
+    set({ error: null })
   },
 
   async checkHealth() {
@@ -178,25 +245,71 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async selectTask(id: string) {
-    const task = await api.getTask(id)
-    const arts = await api.listArtifacts(id)
-    set({ task, artifacts: arts.items, events: [], error: null })
-    await get().refreshResults()
+    // 切换任务先掐断上一个任务的 SSE：否则旧流的事件会继续写进新任务，
+    // 结束回调还会替新任务刷新一次，界面出现"串味"的数据。
+    closeStream?.()
+    closeStream = null
+    set({ taskLoading: true })
+    try {
+      const task = await api.getTask(id)
+      const arts = await api.listArtifacts(id)
+      set({ ...EMPTY_TASK_SCOPED, task, artifacts: arts.items, error: null })
+      await get().refreshResults()
+    } catch (e: unknown) {
+      set({ error: `打开任务失败：${errText(e)}` })
+      throw e
+    } finally {
+      set({ taskLoading: false })
+    }
   },
 
   async newTask(title: string, symptom: string) {
-    const t = await api.createTask({ title, symptom_text: symptom, pclk2_hz: 72000000 })
-    set({ task: t, artifacts: [], events: [], hypotheses: [], unknowns: [], references: [], verifications: [], trace: [] })
-    await get().loadTasks()
-    return t.id
+    closeStream?.()
+    closeStream = null
+    try {
+      const t = await api.createTask({
+        title: title.trim() || '未命名诊断任务',
+        symptom_text: symptom,
+        pclk2_hz: 72000000,
+      })
+      set({ ...EMPTY_TASK_SCOPED, task: t, error: null })
+      await get().loadTasks()
+      return t.id
+    } catch (e: unknown) {
+      set({ error: `新建任务失败：${errText(e)}` })
+      throw e
+    }
   },
 
   async addSource(content: string, name = 'main.c') {
     const id = get().task?.id
     if (!id) return
-    await api.addArtifact(id, 'source_code', name, content)
-    const arts = await api.listArtifacts(id)
-    set({ artifacts: arts.items })
+    if (!content.trim()) {
+      set({ error: '材料内容为空，未提交' })
+      return
+    }
+    try {
+      await api.addArtifact(id, 'source_code', name, content)
+      const arts = await api.listArtifacts(id)
+      set({ artifacts: arts.items, error: null })
+    } catch (e: unknown) {
+      set({ error: `提交材料失败：${errText(e)}` })
+    }
+  },
+
+  async deleteTask(id: string) {
+    // 删的正好是当前任务：先关流，避免诊断回写到一个已删除的任务
+    if (get().task?.id === id) {
+      closeStream?.()
+      closeStream = null
+    }
+    try {
+      await api.deleteTask(id)
+      if (get().task?.id === id) set({ ...EMPTY_TASK_SCOPED, task: null })
+      await get().loadTasks()
+    } catch (e: unknown) {
+      set({ error: `删除任务失败：${errText(e)}` })
+    }
   },
 
   /**
@@ -214,6 +327,13 @@ export const useStore = create<State>((set, get) => ({
       hypotheses: [],
       unknowns: [],
       references: [],
+      // 上一轮的工具留痕/现象/待补充项必须清掉：否则诊断进行中会显示
+      // 上一轮的"工具 5/8"，看起来像本轮已经跑过。
+      toolRuns: [],
+      runStats: null,
+      followups: [],
+      phenomenon: null,
+      phenomMatches: [],
       error: null,
       llmNarrative: null,
     })
@@ -323,13 +443,22 @@ export const useStore = create<State>((set, get) => ({
   async submitResult(vid: string, observed: string, match: string) {
     const id = get().task?.id
     if (!id) return
-    await api.submitResult(id, vid, {
-      observed,
-      match,
-      recorded_by: 'Zero',
-    })
-    await api.reassess(id, get().useLlm, get().llmPreferred)
-    await get().refreshResults()
+    if (!observed.trim()) {
+      set({ error: '实测观测值为空：这条记录必须由你填写，系统不会代填' })
+      return
+    }
+    try {
+      await api.submitResult(id, vid, {
+        observed,
+        match,
+        recorded_by: get().recordedBy,
+      })
+      await api.reassess(id, get().useLlm, get().llmPreferred)
+      await get().refreshResults()
+      set({ error: null })
+    } catch (e: unknown) {
+      set({ error: `回填失败：${errText(e)}` })
+    }
   },
 
   /**
@@ -342,11 +471,18 @@ export const useStore = create<State>((set, get) => ({
    * 在诊断进行中也允许打断切换（runDiagnose 会关闭旧流再开新流）。
    */
   async loadDemo(sampleId: string) {
-    const s = await api.getSample(sampleId)
-    const tid = await get().newTask(`[演示数据] ${s.title}`, s.symptom)
-    await get().addSource(s.content, `${sampleId}.c`)
-    set({ demoSampleId: sampleId })
-    void get().runDiagnose()
+    try {
+      const s = await api.getSample(sampleId)
+      const stillWanted = () => get().demoSampleId === sampleId
+      await get().newTask(`[演示数据] ${s.title}`, s.symptom)
+      // newTask 会清空任务级状态（含 demoSampleId），这里在它之后打标记
+      set({ demoSampleId: sampleId })
+      await get().addSource(s.content, `${sampleId}.c`)
+      if (!stillWanted()) return
+      void get().runDiagnose()
+    } catch (e: unknown) {
+      set({ error: `载入示例失败：${errText(e)}` })
+    }
   },
 
   /**
@@ -358,11 +494,20 @@ export const useStore = create<State>((set, get) => ({
   async submitObservedBaud(baud: number, source: string) {
     const id = get().task?.id
     if (!id) return
-    await api.patchTask(id, { observed_baud: baud, observed_baud_source: source })
-    const t = await api.getTask(id)
-    set({ task: t })
-    await api.reassess(id, get().useLlm, get().llmPreferred)
-    await get().refreshResults()
+    if (!Number.isFinite(baud) || baud <= 0) {
+      set({ error: '实测波特率必须是正数（单位 bps）' })
+      return
+    }
+    try {
+      await api.patchTask(id, { observed_baud: baud, observed_baud_source: source })
+      const t = await api.getTask(id)
+      set({ task: t })
+      await api.reassess(id, get().useLlm, get().llmPreferred)
+      await get().refreshResults()
+      set({ error: null })
+    } catch (e: unknown) {
+      set({ error: `提交实测波特率失败：${errText(e)}` })
+    }
   },
 
   /**
@@ -374,24 +519,37 @@ export const useStore = create<State>((set, get) => ({
    */
   async submitSerialCapture(raw, meta) {
     const id = get().task?.id
-    if (!id || !raw.trim()) return
-    await api.addHwEvidence(id, {
-      kind: 'serial_capture',
-      raw_text: raw,
-      recorded_by: 'Zero',
-      case_id: meta.case_id ?? '',
-      preset: meta.preset ?? '',
-      note: meta.note ?? '',
-      observed_baud: meta.observed_baud,
-    })
-    await api.reassess(id, get().useLlm, get().llmPreferred)
-    await get().refreshResults()
+    if (!id || !raw.trim()) {
+      if (id) set({ error: '抓帧内容为空：请粘贴串口助手真实采集到的原始数据' })
+      return
+    }
+    try {
+      await api.addHwEvidence(id, {
+        kind: 'serial_capture',
+        raw_text: raw,
+        recorded_by: get().recordedBy,
+        case_id: meta.case_id ?? '',
+        preset: meta.preset ?? '',
+        note: meta.note ?? '',
+        observed_baud: meta.observed_baud,
+      })
+      await api.reassess(id, get().useLlm, get().llmPreferred)
+      await get().refreshResults()
+      set({ error: null })
+    } catch (e: unknown) {
+      set({ error: `提交抓帧失败：${errText(e)}` })
+    }
   },
 
   async removeHwEvidence(hid: string) {
     const id = get().task?.id
     if (!id) return
-    await api.deleteHwEvidence(id, hid)
-    await get().refreshResults()
+    try {
+      await api.deleteHwEvidence(id, hid)
+      await get().refreshResults()
+      set({ error: null })
+    } catch (e: unknown) {
+      set({ error: `删除实测记录失败：${errText(e)}` })
+    }
   },
 }))

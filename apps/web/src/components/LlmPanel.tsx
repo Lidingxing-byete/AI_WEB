@@ -17,6 +17,9 @@ export function LlmPanel() {
   const online = llmStatus?.available ?? false
   const model = llmNarrative?.model || llmStatus?.model || '未接入'
   const cloud = llmStatus?.cloud
+  // 当前实际会走哪一级：云优先且云端可用时才是"云端在线"，
+  // 否则一直写"本地在线"会在云端生效后与事实不符。
+  const activeCloud = online && llmStatus?.active_hint === 'cloud'
 
   const PROVIDERS: { value: 'auto' | 'local' | 'cloud'; label: string }[] = [
     { value: 'auto', label: '自动（云端优先）' },
@@ -49,7 +52,13 @@ export function LlmPanel() {
           />
           <span className="font-mono text-ink-700">{model}</span>
           <span className="text-ink-400">
-            {llmStatus ? (online ? '本地在线' : `离线：${llmStatus.reason}`) : '状态未知'}
+            {llmStatus
+              ? online
+                ? activeCloud
+                  ? '云端在线'
+                  : '本地在线'
+                : `离线：${llmStatus.reason}`
+              : '状态未知'}
           </span>
           {llmNarrative?.duration_ms ? (
             <span className="font-mono text-ink-400">
@@ -171,7 +180,7 @@ export function LlmPanel() {
         )}
 
         <div className="border-t border-ink-100 pt-1.5 text-[10px] leading-relaxed text-ink-400">
-          模型只做解释与补充建议，**不参与候选根因判定与评分**；
+          模型只做解释与补充建议，不参与候选根因判定与评分；
           输出先过证据纪律守卫（禁止声称实测/已验证、禁止标注证据等级），
           未通过即整段作废。
         </div>
