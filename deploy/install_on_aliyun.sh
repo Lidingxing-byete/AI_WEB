@@ -43,14 +43,20 @@ fi
 echo "使用解释器：$PY ($("$PY" -V 2>&1))"
 
 # ---------------------------------------------------------------- 2. 代码
-say "2/7 拉取代码到 $APP_DIR"
+say "2/7 准备代码到 $APP_DIR"
+TARBALL="${SRC_TARBALL:-/tmp/xinzhen-src.tar.gz}"
 if [ -d "$APP_DIR/.git" ]; then
-  git -C "$APP_DIR" pull --ff-only || die "git pull 失败（本地有改动？）"
+  git -C "$APP_DIR" pull --ff-only || echo "⚠️ git pull 失败，继续用现有代码"
+elif [ -f "$TARBALL" ]; then
+  echo "使用离线包：$TARBALL"
+  mkdir -p "$APP_DIR"
+  tar -xzf "$TARBALL" -C "$APP_DIR" --strip-components=1 || die "解压失败"
 else
   mkdir -p "$APP_DIR"
-  git clone --depth 1 "$REPO_URL" "$APP_DIR" || die "git clone 失败"
+  echo "未发现离线包，尝试 git clone（国内服务器可能较慢/失败）"
+  git clone --depth 1 "$REPO_URL" "$APP_DIR" || die "git clone 失败：请改用离线包，见部署说明 §10.2"
 fi
-[ -f "$APP_DIR/apps/server/requirements.txt" ] || die "仓库结构异常（缺 requirements.txt）"
+[ -f "$APP_DIR/apps/server/requirements.txt" ] || die "代码结构异常（缺 requirements.txt）"
 
 # ---------------------------------------------------------------- 3. venv
 say "3/7 创建虚拟环境并安装依赖（只有 fastapi / uvicorn / pydantic）"
@@ -71,8 +77,8 @@ chmod 600 "$APP_DIR/apps/server/.env"
 # ---------------------------------------------------------------- 5. 用户与目录
 say "5/7 准备运行用户与目录"
 id "$SERVICE_USER" >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin "$SERVICE_USER"
-mkdir -p "$APP_DIR/www/xz" "$APP_DIR/apps/server/data"
-chown -R "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR/apps/server/data"
+mkdir -p "$APP_DIR/www/xz" "$APP_DIR/apps/data"
+chown -R "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR/apps/data"
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR/www"
 chmod 600 "$APP_DIR/apps/server/.env" && chown "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR/apps/server/.env"
 

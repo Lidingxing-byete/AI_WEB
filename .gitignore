@@ -10,6 +10,7 @@ build/
 
 # ---- 本地数据 ----
 apps/server/data/
+apps/data/
 *.db
 *.db-wal
 *.db-shm
@@ -64,3 +65,4 @@ deliverables/*.mp4
 
 # 前端构建产物（上传服务器用，入库无意义）
 deploy/xz-web-dist.zip
+deploy/xinzhen-src.tar.gz

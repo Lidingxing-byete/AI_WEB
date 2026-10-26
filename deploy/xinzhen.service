@@ -26,7 +26,7 @@ RestartSec=3
 TimeoutStopSec=20
 
 # 最小权限：只允许写自己的数据目录（SQLite 与云端密钥文件都在这里）
-ReadWritePaths=/opt/xinzhen/apps/server/data
+ReadWritePaths=/opt/xinzhen/apps/data
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
