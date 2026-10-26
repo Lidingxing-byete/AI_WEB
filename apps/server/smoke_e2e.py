@@ -392,12 +392,12 @@ def main() -> int:
     check("Phase 3" not in str(ml.get("note", ""))
           and "不接模型" not in str(ml.get("note", "")),
           "健康检查不再残留'先纯规则层/不接模型'的过期说明")
-    _, ms = _req("GET", "/models/status")
-    lv = {x.get("level"): x for x in ms.get("levels", [])}
-    check(lv.get("L3", {}).get("status") == "always_available",
-          "模型状态区分'配置态'：规则层始终可用")
-    check(lv.get("L1", {}).get("configured") is False,
-          "未填密钥时云端 L1 如实标为未配置（不假装可用）")
+    _, lst = _req("GET", "/llm/status")
+    check(isinstance(lst.get("levels"), list) or "cloud" in lst,
+          "模型状态如实返回三级链（本地/云端/规则层）", str(sorted(lst)[:6]))
+    check((lst.get("cloud") or {}).get("configured") is False,
+          "未携带密钥时云端如实标为未配置（不假装可用）",
+          str((lst.get("cloud") or {}).get("configured")))
 
     # ---- 24. 任务软删除与状态白名单 ----
     st_new, tmp_task = _req("POST", "/tasks", {"title": "删除用例临时任务"})

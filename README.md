@@ -140,14 +140,14 @@ cd apps/web && VITE_BASE=/xz/ npx vite build     # PowerShell: $env:VITE_BASE='/
 ## 目录结构
 
 ```
-├─ apps/server          # 后端：FastAPI 38 文件 / 8401 行
+├─ apps/server          # 后端：FastAPI 37 文件 / 8491 行
 │  ├─ app/engine        # 8 个诊断工具 + 状态机编排
 │  ├─ app/corpus        # 规则/卡片加载与 BM25 检索
 │  ├─ app/llm           # 模型客户端 + 输出守卫 + 降级链
 │  ├─ eval/             # 固定评测集 / 消融 / 边界 / 安全审计 / LLM 基线
 │  ├─ samples/          # 12 个自撰故障样例（C1–C6 × 故障/对照）
 │  └─ run_all_tests.py  # 一键回归（8 套件）
-├─ apps/web             # 前端：React + TS 14 文件 / 2928 行（三栏工作台）
+├─ apps/web             # 前端：React + TS 15 文件 / 3556 行（三栏工作台）
 ├─ docs/                # 方案、架构、各阶段验收、风险清单、语料
 ├─ deliverables/        # 对外交付：技术文档、测试报告、答辩材料、演示脚本
 ├─ deploy/              # 云服务器部署件（systemd / Nginx / 生产环境变量 / 部署说明）

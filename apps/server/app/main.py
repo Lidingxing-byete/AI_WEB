@@ -30,9 +30,7 @@ from app.config import (
     CHIP_F103C8T6,
     CLOUD_API_KEY,
     CLOUD_MODEL,
-    CLOUD_PROVIDER,
     LLM_ENABLED,
-    LLM_MODEL,
     LLM_PREFERRED,
     LLM_TIMEOUT_S,
     OLLAMA_HOST,
@@ -156,35 +154,6 @@ def health() -> dict:
                      "可用性以 /api/llm/status 的探测结果为准"),
         },
         "corpus": {"rules": len(rules_by_id()), "cards": len(cards)},
-    }
-
-
-@app.get("/api/models/status")
-def models_status() -> dict:
-    """三级降级链的**配置态**（不联网）。
-
-    这里回答"装了哪几级、默认先走哪级"；"现在能不能用"由
-    `/api/llm/status` 探测后给出。两者分开，避免把配置当可用性。
-    """
-    cloud_on = bool(CLOUD_API_KEY)
-    levels = [
-        {"level": "L1", "provider": CLOUD_PROVIDER, "model": CLOUD_MODEL,
-         "configured": cloud_on,
-         "status": "configured" if cloud_on else "not_configured",
-         "reason": "" if cloud_on else "XZ_CLOUD_API_KEY 未配置，自动跳过"},
-        {"level": "L2", "provider": "ollama", "model": LLM_MODEL,
-         "configured": LLM_ENABLED,
-         "status": "enabled" if LLM_ENABLED else "disabled",
-         "reason": "" if LLM_ENABLED else "XZ_LLM_ENABLED=0"},
-        {"level": "L3", "provider": "rule", "model": "deterministic-rules",
-         "configured": True, "status": "always_available",
-         "reason": "确定性规则层，始终可用（模型不可用时的兜底）"},
-    ]
-    return {
-        "levels": levels,
-        "current": ("L1" if cloud_on else "L2") if LLM_ENABLED else "L3",
-        "preferred": LLM_PREFERRED,
-        "note": "配置态，不代表当前可用；实时可用性见 /api/llm/status",
     }
 
 
@@ -1269,27 +1238,8 @@ def get_report(tid: str, regenerate: bool = False) -> dict:
 # ======================================================================
 # 知识库
 # ======================================================================
-@app.get("/api/knowledge/cards")
-def list_cards() -> dict:
-    cards = load_cards()
-    return {"items": [{"card_id": c.card_id, "title": c.title,
-                       "topic": c.topic, "source_ref": c.source_ref}
-                      for c in cards]}
-
-
-@app.post("/api/knowledge/search")
-def search_cards(q: str = "", top_k: int = 5) -> dict:
-    from app.corpus.bm25 import BM25
-    hits = BM25().search(q, top_k=top_k)
-    return {"items": [h.to_dict() for h in hits]}
-
-
-# ======================================================================
-# 内置示例（P1-D7：内置，全部标 [演示数据]）
-# ======================================================================
 _SAMPLES_DIR = Path(__file__).resolve().parents[1] / "samples"
 
-# 样例元数据：自撰，技术依据标 [待验证]（未经硬件实测）
 # 样例元数据：全部自撰（R19：不引用江协科技教程源码，命名体系亦不沿用）。
 # 技术依据未经硬件实测的一律标 [待验证]，由 Phase 5 回填。
 SAMPLES_META = {
