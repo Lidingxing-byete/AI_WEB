@@ -30,10 +30,11 @@ PASS, FAIL = "✅", "❌"
 _results: list[tuple[bool, str, str]] = []
 
 
-def _req(method: str, path: str, body: dict | None = None) -> tuple[int, dict | list | str]:
+def _req(method: str, path: str, body: dict | None = None,
+         extra_headers: dict | None = None) -> tuple[int, dict | list | str]:
     url = BASE + path
     data = None
-    headers = {}
+    headers = dict(extra_headers or {})
     if body is not None:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -412,6 +413,24 @@ def main() -> int:
     st_bad, _ = _req("PATCH", f"/tasks/{tid}", {"status": "hacked"})
     check(st_bad == 422, "非法任务状态被 422 拒绝（状态白名单）",
           f"HTTP {st_bad}")
+
+    # ---- 25. 测试者自带云端密钥（只回掩码，服务端不保存） ----
+    fake_key = "sk-smoke-test-0123456789abcdef"
+    st_v, vr = _req("POST", "/llm/verify-key", {"api_key": fake_key})
+    check(st_v == 200 and vr.get("ok") is False,
+          "无效密钥校验结果为不可用（不误报可用）", str(vr.get("reason"))[:40])
+    check(fake_key not in json.dumps(vr, ensure_ascii=False)
+          and "…" in str(vr.get("masked")),
+          "校验响应只回掩码，不含明文密钥", str(vr.get("masked")))
+    check(vr.get("storage") == "none",
+          "校验接口明确声明服务端不保存密钥")
+    code_s, stt = _req("GET", "/llm/status", extra_headers={"X-Cloud-Key": fake_key})
+    cloud = (stt or {}).get("cloud", {}) if isinstance(stt, dict) else {}
+    check(code_s == 200 and cloud.get("key_source") == "session"
+          and cloud.get("configured") is True,
+          "请求头携带的密钥被识别为本次会话密钥", str(cloud.get("key_source")))
+    check(fake_key not in json.dumps(stt, ensure_ascii=False),
+          "状态响应不含明文密钥")
 
     # ---- 汇总 ----
     ok = sum(1 for r in _results if r[0])

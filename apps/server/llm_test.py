@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 
 from app.config import LLM_MODEL
@@ -223,6 +224,36 @@ def cloud() -> None:
     check("云端探测失败如实报告", (not ok) and "不可达" in why, why)
 
 
+def keys() -> None:
+    """测试者自带密钥（离线）：只认本次请求、对外只回掩码、绝不落盘。"""
+    print("—— 测试者自带密钥 ——")
+    from app.llm.client import mask_key
+    check("掩码只露首尾", mask_key("sk-unit-test-abcdef123456") == "sk-u…3456",
+          mask_key("sk-unit-test-abcdef123456"))
+    check("空密钥掩码为空", mask_key("") == "")
+
+    svc = LlmService(cloud_key="sk-unit-test-abcdef123456",
+                     cloud_model="deepseek-chat")
+    c = svc.cloud_config()
+    check("随请求密钥来源标 session",
+          c["source"] == "session" and c["model"] == "deepseek-chat",
+          str(c["source"]))
+    check("配置齐全时云端视为就绪", svc._cloud_ready() is True)
+
+    # 不真的打网络：把探测替换掉，只验证“status 不泄露明文”
+    svc.cloud_probe = lambda force=False: (False, "离线用例跳过探测")  # type: ignore[method-assign]
+    st = svc.status(probe=False)
+    check("status 中不含明文密钥",
+          "sk-unit-test-abcdef123456" not in json.dumps(st, ensure_ascii=False),
+          str(st.get("cloud", {}).get("key_masked")))
+    check("status 标出密钥来源 session",
+          st.get("cloud", {}).get("key_source") == "session",
+          str(st.get("cloud", {}).get("key_source")))
+
+    check("不传密钥时来源不是 session",
+          LlmService().cloud_config()["source"] != "session")
+
+
 def online() -> None:
     print("—— 在线（本机 Ollama）——")
     svc = LlmService()
@@ -246,6 +277,7 @@ def online() -> None:
 if __name__ == "__main__":
     offline()
     cloud()
+    keys()
     online()
     print()
     print(f"结果：通过 {PASS} · 失败 {FAIL}")

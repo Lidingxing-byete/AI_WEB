@@ -39,7 +39,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 def req(method: str, path: str, body: dict | None = None,
-        timeout: float = 30.0) -> tuple[int, dict | str]:
+        timeout: float = 120.0) -> tuple[int, dict | str]:
     data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body else None
     r = urllib.request.Request(f"{BASE}{path}", data=data, method=method,
                                headers={"Content-Type": "application/json"})

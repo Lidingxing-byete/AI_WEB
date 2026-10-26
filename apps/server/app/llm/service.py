@@ -29,7 +29,7 @@ from ..config import (CLOUD_API_KEY, CLOUD_BASE_URL, CLOUD_MODEL,
                       LLM_MODEL, LLM_PREFERRED, OLLAMA_HOST)
 from ..engine.evidence import EvidenceTag
 from .client import (PROVIDER_CLOUD, PROVIDER_LOCAL, CloudClient,
-                     CloudUnavailable, OllamaClient, OllamaUnavailable)
+                     CloudUnavailable, OllamaClient, OllamaUnavailable, mask_key)
 from .guard import VERDICT_OK, validate
 from .prompts import (BASELINE_SYSTEM, NARRATE_SYSTEM,
                       build_baseline_prompt, build_narrate_prompt)
@@ -95,11 +95,18 @@ class LlmService:
     def __init__(self, client: OllamaClient | None = None,
                  cloud_client: CloudClient | None = None,
                  enabled: bool | None = None,
-                 preferred: str | None = None) -> None:
+                 preferred: str | None = None,
+                 cloud_key: str = "",
+                 cloud_model: str = "") -> None:
         self.enabled = LLM_ENABLED if enabled is None else enabled
         self.client = client or OllamaClient()
         self.preferred = (preferred or LLM_PREFERRED).strip().lower()
+        # 测试者自带的密钥：**只在本次请求内有效**，不落盘、不缓存到下次请求。
+        self._key_override = (cloud_key or "").strip()
+        self._model_override = (cloud_model or "").strip()
         self._cloud_client = cloud_client
+        self._cloud_injected = cloud_client is not None
+        self._cloud_cfg_sig = ""
         self._health_at = 0.0
         self._health_ok = False
         self._cloud_health_at = 0.0
@@ -107,20 +114,61 @@ class LlmService:
         self._models: list[str] = []
 
     # ------------------------------------------------------------------
+    def cloud_config(self) -> dict:
+        """当前生效的云端配置。优先级：**测试者自带的本次请求密钥** > 服务端环境变量。
+
+        只在本进程内使用；`api_key` 是明文，调用方绝对不得外传
+        （对外一律用 `masked`）。
+        """
+        api_key = self._key_override or CLOUD_API_KEY
+        model = self._model_override or CLOUD_MODEL
+        provider = CLOUD_PROVIDER
+        base_url = CLOUD_BASE_URL
+        if self._key_override:
+            source = "session"
+        elif CLOUD_API_KEY:
+            source = "env"
+        else:
+            source = "none"
+        return {
+            "provider": provider,
+            "base_url": base_url,
+            "model": model,
+            "api_key": api_key,
+            "source": source,
+            "masked": mask_key(api_key),
+            "updated_at": None,
+        }
+
     def _cloud_ready(self) -> bool:
         """云端是否可用：显式注入的客户端视为就绪（测试用）；
         运行时默认路径要求**配置完整**——缺任意一项即视为未启用（不猜、不半配）。"""
-        if self._cloud_client is not None:
+        if self._cloud_injected:
             return True
-        return bool(CLOUD_PROVIDER and CLOUD_BASE_URL and CLOUD_MODEL
-                    and CLOUD_API_KEY)
+        cfg = self.cloud_config()
+        return bool(cfg["provider"] and cfg["base_url"] and cfg["model"]
+                    and cfg["api_key"])
 
     def _get_cloud_client(self) -> CloudClient | None:
-        """惰性构造云端客户端：只有就绪才创建（不配置绝不联网）。"""
+        """惰性构造云端客户端：只有就绪才创建（不配置绝不联网）。
+
+        配置签名变了（手动改/删密钥）就重建客户端，避免拿着旧密钥
+        一直失败——手工改完密钥应该立刻生效，不该要求重启服务。
+        """
+        if self._cloud_injected:
+            return self._cloud_client
         if not self._cloud_ready():
+            # 密钥被删除：清掉旧客户端，立刻回到"未配置"
+            self._cloud_client = None
+            self._cloud_cfg_sig = ""
             return None
-        if self._cloud_client is None:
-            self._cloud_client = CloudClient()
+        cfg = self.cloud_config()
+        sig = f"{cfg['base_url']}|{cfg['model']}|{cfg['api_key']}"
+        if self._cloud_client is not None and self._cloud_cfg_sig == sig:
+            return self._cloud_client
+        self._cloud_client = CloudClient(
+            base_url=cfg["base_url"], api_key=cfg["api_key"], model=cfg["model"])
+        self._cloud_cfg_sig = sig
         return self._cloud_client
 
     def _order(self) -> list[str]:
@@ -265,11 +313,16 @@ class LlmService:
         )
 
     def status(self, probe: bool = True) -> dict:
-        """本地 + 云端双状态，供 /api/llm/status 与前端面板展示。"""
+        """本地 + 云端双状态，供 /api/llm/status 与前端面板展示。
+
+        **只回掩码**：`key_masked` 形如 `sk-12…ab90`，明文密钥永远不出这个进程。
+        """
         l_ok, l_why = self.probe(force=probe)
+        cfg = self.cloud_config()
         cloud_ready = self._cloud_ready()
         c_ok, c_why = self.cloud_probe(force=probe) if cloud_ready \
-            else (False, "云端未配置（XZ_CLOUD_API_KEY 留空）")
+            else (False, ("云端未配置（密钥未填写）" if cfg["source"] == "none"
+                          else "云端配置不完整"))
         return {
             "enabled": self.enabled,
             "provider": PROVIDER_LOCAL,
@@ -281,14 +334,18 @@ class LlmService:
             "preferred": self.preferred,
             "active_hint": ("cloud" if (self.preferred in ("cloud", "auto")
                                         and cloud_ready and c_ok) else "local"),
-            "cloud_provider": CLOUD_PROVIDER,
+            "cloud_provider": cfg["provider"],
             "cloud": {
-                "provider": CLOUD_PROVIDER,
-                "base_url": CLOUD_BASE_URL,
-                "model": CLOUD_MODEL,
+                "provider": cfg["provider"],
+                "base_url": cfg["base_url"],
+                "model": cfg["model"],
                 "configured": cloud_ready,
                 "available": c_ok,
                 "reason": c_why,
+                # 手动添加 / 环境变量 / 未配置——前端据此显示来源
+                "key_source": cfg["source"],
+                "key_masked": cfg["masked"],
+                "updated_at": cfg["updated_at"],
             },
             "note": ("模型仅用于解释已查出的结论与补充验证建议，"
                      "输出恒为 [推断]，不参与根因判定；不可用时自动降级"),

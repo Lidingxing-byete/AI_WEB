@@ -108,3 +108,6 @@ LLM_HEALTH_CACHE_S = float(os.getenv("XZ_LLM_HEALTH_CACHE_S", "20"))
 LLM_MAX_SUMMARY_CHARS = 400
 LLM_MAX_STEPS = 4
 LLM_MAX_STEP_CHARS = 120
+
+# 说明：云端密钥由**测试者自带**（随请求头传入，服务端不保存），
+# 因此不再需要管理口令；此处仅保留配置位说明，避免误以为服务端存了密钥。

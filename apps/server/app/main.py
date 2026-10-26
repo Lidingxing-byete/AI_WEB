@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -342,8 +342,9 @@ def _load_request(tid: str, use_llm: bool = False) -> DiagnosticRequest:
 
 
 @app.get("/api/tasks/{tid}/diagnose")
-def diagnose_stream(tid: str, use_llm: bool = False,
-                    provider: str = "") -> StreamingResponse:
+def diagnose_stream(tid: str, use_llm: bool = False, provider: str = "",
+                    x_cloud_key: str | None = Header(default=None),
+                    x_cloud_model: str | None = Header(default=None)) -> StreamingResponse:
     """SSE：触发诊断并流式推送**真实执行过程**。
 
     `use_llm=1` 时启用模型解读（T-08）。默认关闭：
@@ -352,8 +353,14 @@ def diagnose_stream(tid: str, use_llm: bool = False,
     """
     _task_or_404(tid)
     req = _load_request(tid, use_llm=use_llm)
+    engine = _engine
     if use_llm:
-        _engine.llm = _llm_service(preferred=provider)
+        # 每个请求独立引擎：测试者各自的密钥不会互相串用
+        # （全局引擎在并发诊断下会让 A 的密钥跑到 B 的请求里）。
+        engine = DiagnosticEngine(llm=_llm_service(
+            preferred=provider or "cloud",
+            cloud_key=(x_cloud_key or "").strip(),
+            cloud_model=(x_cloud_model or "").strip()))
 
     q: queue.Queue[tuple[str, dict] | None] = queue.Queue()
 
@@ -361,7 +368,7 @@ def diagnose_stream(tid: str, use_llm: bool = False,
         try:
             def on_event(etype: str, data: dict) -> None:
                 q.put((etype, data))
-            report = _engine.run(req, on_event=on_event)
+            report = engine.run(req, on_event=on_event)
             _persist_report(tid, report)
             q.put(None)          # 结束哨兵
         except Exception as exc:                      # noqa: BLE001
@@ -399,8 +406,9 @@ def diagnose_stream(tid: str, use_llm: bool = False,
 
 
 @app.post("/api/tasks/{tid}/reassess")
-def reassess(tid: str, use_llm: bool = False,
-             provider: str = "") -> dict:
+def reassess(tid: str, use_llm: bool = False, provider: str = "",
+             x_cloud_key: str | None = Header(default=None),
+             x_cloud_model: str | None = Header(default=None)) -> dict:
     """补充材料后**重新诊断**（同步端点）。
 
     用途：用户在回填实测波特率 / 实际晶振等信息后再次触发诊断，
@@ -410,9 +418,15 @@ def reassess(tid: str, use_llm: bool = False,
     """
     _task_or_404(tid)
     req = _load_request(tid, use_llm=use_llm)
+    engine = _engine
     if use_llm:
-        _engine.llm = _llm_service(preferred=provider)
-    report = _engine.run(req)
+        # 每个请求独立引擎：测试者各自的密钥不会互相串用
+        # （全局引擎在并发诊断下会让 A 的密钥跑到 B 的请求里）。
+        engine = DiagnosticEngine(llm=_llm_service(
+            preferred=provider or "cloud",
+            cloud_key=(x_cloud_key or "").strip(),
+            cloud_model=(x_cloud_model or "").strip()))
+    report = engine.run(req)
     _persist_report(tid, report)
     return {
         "status": report.status,
@@ -433,12 +447,18 @@ def reassess(tid: str, use_llm: bool = False,
 _llm: Any = None
 
 
-def _llm_service(preferred: str = "") -> Any:
+def _llm_service(preferred: str = "", cloud_key: str = "",
+                 cloud_model: str = "") -> Any:
     """惰性创建模型服务：构造引擎/启动服务时都不应触发网络探测。
 
-    `preferred` 非空时按请求覆盖默认偏好（local / cloud / auto）。
+    `preferred` 非空时按请求覆盖默认偏好（local / cloud / auto）；
+    `cloud_key` 非空表示"测试者自带的密钥"，**只用于本次请求**。
     """
     global _llm
+    if cloud_key:
+        from app.llm.service import LlmService
+        return LlmService(preferred=preferred or "cloud",
+                          cloud_key=cloud_key, cloud_model=cloud_model)
     if _llm is None:
         from app.llm.service import LlmService
         _llm = LlmService()
@@ -449,10 +469,65 @@ def _llm_service(preferred: str = "") -> Any:
 
 
 @app.get("/api/llm/status")
-def llm_status(probe: bool = True) -> dict:
-    """模型层可用状态（本地 + 云端双来源）。供前端面板展示与选择器使用。"""
-    svc = _llm_service()
+def llm_status(probe: bool = True,
+               x_cloud_key: str | None = Header(default=None),
+               x_cloud_model: str | None = Header(default=None)) -> dict:
+    """模型层可用状态（本地 + 云端双来源）。
+
+    带 `X-Cloud-Key` 时按该密钥探测云端（前端用来显示"我的密钥是否可用"），
+    密钥只用于本次探测，**不保存**。
+    """
+    svc = _llm_service(cloud_key=(x_cloud_key or "").strip(),
+                       cloud_model=(x_cloud_model or "").strip())
     return svc.status(probe=probe)
+
+
+# ----------------------------------------------------------------------
+# 云端密钥：测试者自带，仅在本次请求内有效
+#
+# 需求（2026-10-26 澄清）：云端调用由**测试者提供自己的 API Key**。
+# 系统不保存、不共享任何人的密钥，所以这里只做两件事：
+#   1) POST /api/llm/verify-key —— 校验一枚密钥能否用（不落盘）；
+#   2) diagnose / reassess / status —— 支持 X-Cloud-Key / X-Cloud-Model 请求头。
+#
+# 红线：
+#   - 密钥只在该请求的内存里存在，用完即丢：不写库、不写文件、不写日志；
+#   - 任何响应只回掩码（sk-12…ab90）；
+#   - base_url 只能由服务端配置决定，**不接受请求头传入**（否则等于开放代理/SSRF）。
+# ----------------------------------------------------------------------
+class VerifyKeyIn(BaseModel):
+    api_key: str = Field(..., min_length=8, max_length=200)
+    model: str = Field("", max_length=64, pattern=r"^[A-Za-z0-9._:-]*$")
+
+
+_VERIFY_HITS: dict[str, list[float]] = {}
+
+
+def _rate_limit(key: str, limit: int = 6, window_s: float = 60.0) -> None:
+    """极简按 IP 限流：防止有人把这个接口当密钥探测器刷。"""
+    now = time.time()
+    hits = [t for t in _VERIFY_HITS.get(key, []) if now - t < window_s]
+    if len(hits) >= limit:
+        raise HTTPException(429, "请求过于频繁，请稍后再试")
+    hits.append(now)
+    _VERIFY_HITS[key] = hits
+
+
+@app.post("/api/llm/verify-key")
+def verify_cloud_key(body: VerifyKeyIn, request: Request) -> dict:
+    """校验测试者提供的密钥是否可用。**不保存**，校验完即丢。"""
+    _rate_limit((request.client.host if request.client else "?") + ":verify")
+    from app.llm.client import CloudClient, mask_key
+    cc = CloudClient(api_key=body.api_key.strip(),
+                     model=(body.model or "").strip() or CLOUD_MODEL)
+    ok = cc.health()
+    return {
+        "ok": ok,
+        "masked": mask_key(body.api_key),
+        "model": cc.model,
+        "reason": "" if ok else "密钥无效或云端不可达（请检查 Key 与网络）",
+        "storage": "none",
+    }
 
 
 @app.get("/api/tasks/{tid}/llm-calls")

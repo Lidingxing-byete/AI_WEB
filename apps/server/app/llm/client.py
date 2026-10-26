@@ -37,6 +37,19 @@ PROVIDER_LOCAL = "ollama-local"
 PROVIDER_CLOUD = "deepseek-cloud"
 
 
+def mask_key(key: str) -> str:
+    """密钥掩码：只露前 4 位与后 4 位，长度不足则全遮。
+
+    任何对外响应（状态、校验结果）都只能用掩码，明文绝不出服务端。
+    """
+    k = (key or "").strip()
+    if not k:
+        return ""
+    if len(k) <= 8:
+        return "****"
+    return f"{k[:4]}…{k[-4:]}"
+
+
 class OllamaUnavailable(RuntimeError):
     """服务不可达 / 模型不存在 / 超时 / 返回非 200。
 

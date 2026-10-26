@@ -1,10 +1,27 @@
 /**
  * 后端 API 客户端。
  *
- * 约定：所有请求走 `/api`，由 vite 代理到 127.0.0.1:8787。
+ * 约定：请求走 `<BASE>/api`。
+ *  - 本地开发：BASE='/', 由 vite 代理到 127.0.0.1:8787；
+ *  - 部署到子路径（如 https://域名/xz/）：BASE='/xz/'（构建时 VITE_BASE 指定），
+ *    由 Nginx 把 /xz/api 反代到后端，前后端同源，不需要 CORS。
  */
+const BASE = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '')
 
-export const API = '/api'
+export const API = `${BASE}/api`
+
+/**
+ * 测试者自带密钥的请求头。
+ *
+ * 只在此处构造、只随请求发出：不写 localStorage（只放 sessionStorage）、
+ * 不进 URL（URL 会进服务端访问日志，等于把密钥写进日志）、不进界面文本。
+ */
+function keyHeaders(cloudKey: string, model = ''): Record<string, string> {
+  const h: Record<string, string> = {}
+  if (cloudKey.trim()) h['X-Cloud-Key'] = cloudKey.trim()
+  if (model.trim()) h['X-Cloud-Model'] = model.trim()
+  return h
+}
 
 export interface Task {
   id: string
@@ -70,6 +87,16 @@ export interface PhenomMatch {
   discriminator: string
 }
 
+/** 密钥校验结果。**永远只有掩码**，明文只在请求头里传一次。 */
+export interface VerifyKeyResult {
+  ok: boolean
+  masked: string
+  model: string
+  reason: string
+  /** 固定为 none：服务端不保存任何密钥 */
+  storage: string
+}
+
 /** 模型层状态（本地 Ollama；云端未启用时为空）。 */
 export interface CloudStatus {
   provider: string
@@ -78,6 +105,10 @@ export interface CloudStatus {
   configured: boolean
   available: boolean
   reason: string
+  /** session=测试者本次带入；env=服务端环境变量；none=未配置 */
+  key_source?: 'session' | 'env' | 'none'
+  key_masked?: string
+  updated_at?: number | null
 }
 
 export interface LlmStatus {
@@ -204,8 +235,9 @@ export interface Reference {
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(API + path, {
-    headers: { 'Content-Type': 'application/json' },
     ...init,
+    // 兼容调用方追加自定义头（如 X-Admin-Token），而不是被整体覆盖
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   })
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
@@ -262,8 +294,24 @@ export const api = {
 
   listTools: () => req<{ items: ToolSpec[] }>('/tools'),
 
-  /** 模型层在线状态。用于显示"模型真的在跑"，而不是假装在跑。 */
-  getLlmStatus: () => req<LlmStatus>('/llm/status'),
+  /**
+   * 模型层在线状态。
+   *
+   * 传 `cloudKey` 时后端按**你的密钥**探测云端（不保存、只用这一次），
+   * 用于面板显示"我的密钥是否可用"。
+   */
+  getLlmStatus: (cloudKey = '', model = '') =>
+    req<LlmStatus>('/llm/status', { headers: keyHeaders(cloudKey, model) }),
+
+  /**
+   * 校验测试者自己的云端密钥：服务端只做一次 `GET /models` 鉴权探测
+   * （不触发计费推理、不落盘），返回 ok 与掩码。
+   */
+  verifyCloudKey: (apiKey: string, model = '') =>
+    req<VerifyKeyResult>('/llm/verify-key', {
+      method: 'POST',
+      body: JSON.stringify({ api_key: apiKey, model }),
+    }),
 
   /** 本任务的模型调用记录（元数据，不含提示词原文）。 */
   getLlmCalls: (id: string) => req<{ items: (LlmNarrative & { created_at: number })[] }>(
@@ -312,7 +360,8 @@ export const api = {
    * 补充材料后重新诊断（同步）。
    * 走的是与 SSE 完全相同的引擎路径，不存在两套诊断逻辑。
    */
-  reassess: (id: string, useLlm = false, provider = 'auto') =>
+  reassess: (id: string, useLlm = false, provider = 'auto',
+             cloudKey = '', model = '') =>
     req<{
       status: string
       hypotheses: any[]
@@ -322,7 +371,7 @@ export const api = {
       llm_narrative: LlmNarrative | null
     }>(
       `/tasks/${id}/reassess?use_llm=${useLlm ? 1 : 0}&provider=${encodeURIComponent(provider)}`,
-      { method: 'POST' },
+      { method: 'POST', headers: keyHeaders(cloudKey, model) },
     ),
 
   getHypotheses: (id: string) => req<{ items: Hypothesis[] }>(`/tasks/${id}/hypotheses`),
@@ -352,10 +401,14 @@ export const api = {
 }
 
 /**
- * SSE 事件流。
+ * SSE 事件流（fetch + ReadableStream 实现）。
  *
- * 这里消费的是**后端真实 trace**（引擎每完成一步即推送），
- * 不是前端伪造的动画。
+ * 为什么不用 EventSource：测试者自带的密钥必须放在**请求头**里。
+ * EventSource 不支持自定义头，只能把密钥塞进 URL——而 URL 会进
+ * Nginx/uvicorn 访问日志，等于把密钥写进日志。因此这里用 fetch 读流、
+ * 自己解析 SSE 帧，密钥只走 header。
+ *
+ * 这里消费的是**后端真实 trace**（引擎每完成一步即推送），不是前端伪造的动画。
  */
 export function openDiagnoseStream(
   taskId: string,
@@ -365,55 +418,57 @@ export function openDiagnoseStream(
   },
   useLlm = false,
   provider = 'auto',
+  cloudKey = '',
+  cloudModel = '',
 ): () => void {
-  // use_llm 默认 0：默认诊断路径是纯规则层，不依赖模型可用性
-  const es = new EventSource(
-    `${API}/tasks/${taskId}/diagnose?use_llm=${useLlm ? 1 : 0}&provider=${encodeURIComponent(provider)}`,
-  )
-  const types = [
-    'step_start',
-    'symptom',
-    'step_done',
-    'hypothesis_update',
-    'retrieval_done',
-    'followups',
-    'phenomenon',
-    'phenomenon_matches',
-    'llm_narrative',
-    'done',
-    'closed',
-  ]
-  for (const t of types) {
-    es.addEventListener(t, (e: MessageEvent) => {
-      try {
-        handlers.onEvent(t, JSON.parse(e.data))
-      } catch (err) {
-        // 解析失败会把手上的 data 变成 {}，若该事件恰为 error，
-        // 会把"诊断出错"误报成错误文案。此处显式留痕便于定位。
-        console.warn(`[SSE] ${t} 事件解析失败`, e.data)
-        handlers.onEvent(t, {})
-      }
-    })
-  }
-  // 'error' 单独监听：EventSource 的原生 error（连接中断 / 服务器正常
-  // 结束关闭响应）与服务器自定义 `event: error` 同名。原生 error 事件
-  // 没有 data，必须据此区分——否则每次诊断正常结束都会被误报成
-  // "诊断出错"。原生 error 由下方 onerror 负责关闭连接。
-  es.addEventListener('error', (e: Event) => {
-    const me = e as MessageEvent
-    if (me.data === undefined || me.data === null || me.data === '') {
-      return
-    }
+  const ctrl = new AbortController()
+  const url = `${API}/tasks/${taskId}/diagnose?use_llm=${useLlm ? 1 : 0}&provider=${encodeURIComponent(provider)}`
+
+  void (async () => {
     try {
-      handlers.onEvent('error', JSON.parse(me.data))
-    } catch (err) {
-      console.warn('[SSE] error 事件解析失败', me.data)
-      handlers.onEvent('error', {})
+      const res = await fetch(url, {
+        headers: { Accept: 'text/event-stream', ...keyHeaders(cloudKey, cloudModel) },
+        signal: ctrl.signal,
+      })
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      // 逐帧解析：帧以空行分隔，`event:` 与 `data:` 各占一行
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        let idx = buf.indexOf('\n\n')
+        while (idx >= 0) {
+          const frame = buf.slice(0, idx)
+          buf = buf.slice(idx + 2)
+          let evt = ''
+          let data = ''
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('event:')) evt = line.slice(6).trim()
+            else if (line.startsWith('data:')) data += line.slice(5).trim()
+          }
+          if (evt) {
+            try {
+              handlers.onEvent(evt, data ? JSON.parse(data) : {})
+            } catch {
+              // 解析失败不能让整条流崩掉：留痕后按空对象继续
+              console.warn(`[SSE] ${evt} 事件解析失败`, data)
+              handlers.onEvent(evt, {})
+            }
+          }
+          idx = buf.indexOf('\n\n')
+        }
+      }
+    } catch (e) {
+      // 主动 abort（切换任务 / 重新诊断）不算错误
+      if (!ctrl.signal.aborted) console.warn('[SSE] 连接中断', e)
+    } finally {
+      handlers.onClose?.()
     }
-  })
-  es.onerror = () => {
-    es.close()
-    handlers.onClose?.()
-  }
-  return () => es.close()
+  })()
+
+  return () => ctrl.abort()
 }

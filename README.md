@@ -67,8 +67,10 @@ FastAPI (apps/server)
 - Node.js 18+（开发用 22.x）
 - （可选）本地 Ollama `http://127.0.0.1:11434`，已拉取 `qwen2.5-coder:7b`（默认，另有 7b / 3b 备选）
   —— 没有也不影响：自动走纯规则层
-- （可选）云端 DeepSeek：在 `apps/server/.env` 填入 `XZ_CLOUD_API_KEY` 即启用
-  （默认 `deepseek-chat`，备选 `deepseek-reasoner`）；留空则云端自动跳过，克隆即跑
+- （可选）云端 DeepSeek：**测试者自带 Key**——页面「模型解读 → 我的云端密钥」填入即可，
+  只存本标签页（sessionStorage），随请求头发给后端、用完即丢，不写库/不写文件/不写日志；
+  测试结束点「删除密钥」或关标签页即清除。站长也可在 `apps/server/.env` 填 `XZ_CLOUD_API_KEY`
+  作为兜底（默认 `deepseek-chat`）。都没有则云端自动跳过，克隆即跑。
 
 ### 后端
 
@@ -95,6 +97,21 @@ npm run dev          # http://127.0.0.1:5173
 cd apps/server
 python run_all_tests.py        # 8 个套件，需后端在跑（评测/冒烟依赖真实服务）
 ```
+
+### 部署到云服务器（可选）
+
+`deploy/` 下是可直接套用的部署件（**子路径 + 云端 AI 为主**，与本机博客共存）：
+
+- `deploy/部署说明.md` —— 逐步操作（Python ≥3.10 / venv / systemd / Nginx / 子路径构建 / 密钥管理）
+- `deploy/xinzhen.service`、`deploy/nginx-xz.conf`、`deploy/env.production.example`
+
+```bash
+# 前端按子路径构建（否则 https://域名/xz/ 会白屏）
+cd apps/web && VITE_BASE=/xz/ npx vite build     # PowerShell: $env:VITE_BASE='/xz/'; npx vite build
+```
+
+> 公网部署不需要站长预置密钥：评审用自己的 Key 体验云端解读，用完自行删除。
+> 建议给 `/xz/` 加 `auth_basic` 与按 IP 限流，避免接口被脚本刷。
 
 ## 评测摘要（趋势，非准确率）
 
@@ -133,6 +150,7 @@ python run_all_tests.py        # 8 个套件，需后端在跑（评测/冒烟�
 ├─ apps/web             # 前端：React + TS 14 文件 / 2928 行（三栏工作台）
 ├─ docs/                # 方案、架构、各阶段验收、风险清单、语料
 ├─ deliverables/        # 对外交付：技术文档、测试报告、答辩材料、演示脚本
+├─ deploy/              # 云服务器部署件（systemd / Nginx / 生产环境变量 / 部署说明）
 └─ firmware/baseline_usart1  # 基准工程（自撰 main.c，硬件验证用）
 ```
 

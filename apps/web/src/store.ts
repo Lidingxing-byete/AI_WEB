@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import {
   api,
   openDiagnoseStream,
+  type VerifyKeyResult,
   type Followup,
   type HardwareEvidence,
   type Hypothesis,
@@ -62,6 +63,19 @@ interface State {
   useLlm: boolean
   /** 模型来源偏好：auto（云端就绪优先）/ local / cloud（失败自动降级） */
   llmPreferred: 'auto' | 'local' | 'cloud'
+
+  /**
+   * 测试者自己的云端密钥：**只存 sessionStorage**（关标签页即消失），
+   * 随请求头发给后端，后端用完即丢、不落盘。
+   */
+  testerKey: string
+  testerModel: string
+  /** 最近一次密钥校验结果（ok/masked/reason） */
+  keyCheck: VerifyKeyResult | null
+  /** 保存（本标签页）并校验；返回 {ok, message} 供界面提示 */
+  applyTesterKey: (key: string, model?: string) => Promise<{ ok: boolean; message: string }>
+  /** 删除本标签页里的密钥（测试结束必须点它） */
+  clearTesterKey: () => void
 
   /** 实测记录人：写进每条实测证据，避免固定写死某个人名（可改，存 localStorage） */
   recordedBy: string
@@ -133,6 +147,10 @@ function errText(e: unknown): string {
 }
 
 const RECORDER_KEY = 'xz_recorded_by'
+// 注意：用 sessionStorage 而不是 localStorage —— 关闭标签页即清除，
+// 测试者的密钥不会被长期留在这台机器的浏览器里。
+const TESTER_KEY = 'xz_tester_cloud_key'
+const TESTER_MODEL = 'xz_tester_cloud_model'
 
 /** 记录人默认值：不写死任何个人姓名，用户可改（存本机）。 */
 function loadRecorder(): string {
@@ -140,6 +158,23 @@ function loadRecorder(): string {
     return localStorage.getItem(RECORDER_KEY) || '本机用户'
   } catch {
     return '本机用户'
+  }
+}
+
+/** 读取本标签页里的测试密钥（sessionStorage，关页即失效）。 */
+function loadTesterKey(): string {
+  try {
+    return sessionStorage.getItem(TESTER_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+function loadTesterModel(): string {
+  try {
+    return sessionStorage.getItem(TESTER_MODEL) || ''
+  } catch {
+    return ''
   }
 }
 
@@ -173,6 +208,9 @@ export const useStore = create<State>((set, get) => ({
   // 模型来源偏好（与后端 XZ_LLM_PREFERRED 对应，前端可运行时切换）：
   // auto=云端就绪优先否则本地；local=固定本地；cloud=固定云端（失败自动降级本地）
   llmPreferred: 'auto',
+  testerKey: loadTesterKey(),
+  testerModel: loadTesterModel(),
+  keyCheck: null,
   recordedBy: loadRecorder(),
   error: null,
 
@@ -182,6 +220,44 @@ export const useStore = create<State>((set, get) => ({
 
   async setLlmPreferred(p: 'auto' | 'local' | 'cloud') {
     set({ llmPreferred: p })
+  },
+
+  async applyTesterKey(key: string, model = '') {
+    const k = key.trim()
+    if (k.length < 8) {
+      return { ok: false, message: '密钥看起来不完整（至少 8 位）' }
+    }
+    try {
+      const r = await api.verifyCloudKey(k, model.trim())
+      // 无论校验是否通过都先记到本标签页：失败也要能看到"是哪把钥匙失败了"
+      set({ testerKey: k, testerModel: model.trim(), keyCheck: r })
+      try {
+        sessionStorage.setItem(TESTER_KEY, k)
+        sessionStorage.setItem(TESTER_MODEL, model.trim())
+      } catch {
+        /* 隐私模式：只在内存里用，仍可工作 */
+      }
+      await get().loadLlmStatus()
+      return {
+        ok: r.ok,
+        message: r.ok
+          ? `密钥可用（${r.masked}·${r.model}）：仅保存在本标签页，测试结束请点「删除密钥」`
+          : `校验未通过：${r.reason}。请检查 Key 是否正确、账户是否有额度`,
+      }
+    } catch (e: unknown) {
+      return { ok: false, message: `校验请求失败：${errText(e)}` }
+    }
+  },
+
+  clearTesterKey() {
+    set({ testerKey: '', testerModel: '', keyCheck: null })
+    try {
+      sessionStorage.removeItem(TESTER_KEY)
+      sessionStorage.removeItem(TESTER_MODEL)
+    } catch {
+      /* 忽略 */
+    }
+    void get().loadLlmStatus()
   },
 
   setRecordedBy(name: string) {
@@ -227,7 +303,8 @@ export const useStore = create<State>((set, get) => ({
 
   async loadLlmStatus() {
     try {
-      const s = await api.getLlmStatus()
+      // 带上本标签页的密钥：后端据此显示"我的密钥是否可用"（不保存）
+      const s = await api.getLlmStatus(get().testerKey, get().testerModel)
       set({ llmStatus: s })
     } catch {
       // 探测失败按"离线"处理：系统仍可正常诊断（纯规则层）
@@ -393,7 +470,7 @@ export const useStore = create<State>((set, get) => ({
         }
       },
       onClose: () => finish(),
-    }, get().useLlm, get().llmPreferred)
+    }, get().useLlm, get().llmPreferred, get().testerKey, get().testerModel)
     })
   },
 
@@ -453,7 +530,7 @@ export const useStore = create<State>((set, get) => ({
         match,
         recorded_by: get().recordedBy,
       })
-      await api.reassess(id, get().useLlm, get().llmPreferred)
+      await api.reassess(id, get().useLlm, get().llmPreferred, get().testerKey, get().testerModel)
       await get().refreshResults()
       set({ error: null })
     } catch (e: unknown) {
@@ -502,7 +579,7 @@ export const useStore = create<State>((set, get) => ({
       await api.patchTask(id, { observed_baud: baud, observed_baud_source: source })
       const t = await api.getTask(id)
       set({ task: t })
-      await api.reassess(id, get().useLlm, get().llmPreferred)
+      await api.reassess(id, get().useLlm, get().llmPreferred, get().testerKey, get().testerModel)
       await get().refreshResults()
       set({ error: null })
     } catch (e: unknown) {
@@ -533,7 +610,7 @@ export const useStore = create<State>((set, get) => ({
         note: meta.note ?? '',
         observed_baud: meta.observed_baud,
       })
-      await api.reassess(id, get().useLlm, get().llmPreferred)
+      await api.reassess(id, get().useLlm, get().llmPreferred, get().testerKey, get().testerModel)
       await get().refreshResults()
       set({ error: null })
     } catch (e: unknown) {

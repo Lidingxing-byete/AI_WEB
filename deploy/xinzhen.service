@@ -1,0 +1,36 @@
+[Unit]
+Description=芯诊 AI 诊断后端（FastAPI + uvicorn）
+Documentation=https://github.com/Lidingxing-byete/AI_WEB
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 建议用独立低权限用户运行：useradd -r -s /usr/sbin/nologin xinzhen
+User=xinzhen
+Group=xinzhen
+WorkingDirectory=/opt/xinzhen/apps/server
+
+# 密钥不写在命令行、不写进本文件：全部放 /opt/xinzhen/apps/server/.env（chmod 600）
+EnvironmentFile=/opt/xinzhen/apps/server/.env
+Environment=PYTHONUNBUFFERED=1
+
+# 注意：必须单 worker。
+#  1) SSE 诊断在进程内队列/线程里跑，多 worker 会出现"流连到了别的进程"；
+#  2) SQLite 单文件写入；
+#  3) 引擎实例是进程内单例。
+ExecStart=/opt/xinzhen/venv/bin/python -m uvicorn app.main:app \
+    --host 127.0.0.1 --port 8787 --workers 1 --proxy-headers
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+# 最小权限：只允许写自己的数据目录（SQLite 与云端密钥文件都在这里）
+ReadWritePaths=/opt/xinzhen/apps/server/data
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

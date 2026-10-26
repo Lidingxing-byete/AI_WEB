@@ -20,6 +20,8 @@ export default function App() {
     llmStatus,
     hypotheses,
     streaming,
+    testerKey,
+    clearTesterKey,
   } = useStore()
 
   // 启动自检：后端连通性、工具清单、内置样例、模型层状态。
@@ -118,6 +120,22 @@ export default function App() {
         <div className="flex items-center gap-2 border-b border-ink-200 bg-white px-4 py-1 text-[11px] text-ink-500">
           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
           正在载入该任务的诊断数据…
+        </div>
+      )}
+
+      {/* 测试者自带密钥时的常驻提醒：测试结束必须删掉，不能悄悄留着 */}
+      {testerKey.trim() && (
+        <div className="flex items-center justify-between border-b border-amber-300 bg-amber-50 px-4 py-1.5 text-[12px] text-amber-800">
+          <span>
+            你正在使用<strong className="mx-0.5">自己的云端密钥</strong>（仅存于本标签页，随请求头发送、不落盘）。
+            测试结束后请点「删除密钥」，或直接关闭标签页。
+          </span>
+          <button
+            onClick={clearTesterKey}
+            className="ml-3 shrink-0 rounded bg-rose-600 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-rose-700"
+          >
+            删除密钥
+          </button>
         </div>
       )}
 
