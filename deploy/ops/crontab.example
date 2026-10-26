@@ -1,0 +1,17 @@
+# 芯诊 AI 演示站 · 定时任务示例
+#
+# 安装（root）：
+#   install -m 755 deploy/ops/backup_db.sh /opt/xinzhen/ops-backup.sh
+#   install -m 644 deploy/ops/prune_tasks.py /opt/xinzhen/ops-prune.py
+#   crontab -e   # 粘贴下面两行
+#
+# 说明：
+#   - 备份用 SQLite 在线 backup API，服务运行中也安全；保留最近 14 份（约两周）。
+#   - 清理默认只删 7 天前的任务；想更激进就把 --days 改小，想保留更久就改大。
+#   - 日志写 /var/log/xinzhen-ops.log，出问题先看它。
+
+# 每天 03:30 备份
+30 3 * * * /bin/bash /opt/xinzhen/ops-backup.sh >> /var/log/xinzhen-ops.log 2>&1
+
+# 每周日 04:10 清理 7 天前的演示任务
+10 4 * * 0 /opt/xinzhen/venv/bin/python /opt/xinzhen/ops-prune.py --days 7 >> /var/log/xinzhen-ops.log 2>&1
